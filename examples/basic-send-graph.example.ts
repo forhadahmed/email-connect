@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {
-  EmailConnectEngine,
   createOutlookDraft,
+  createGraphEngine,
   sendOutlookReplyDraft,
-} from '../src/index.js';
+} from '@email-connect/graph';
 
 /**
  * Basic Microsoft Graph TX example:
@@ -11,7 +11,7 @@ import {
  * - send it
  * - inspect the harness outbox
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'graph-tx-basic',
   provider: 'graph',

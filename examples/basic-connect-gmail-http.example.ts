@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectHttpServer } from '../src/server/index.js';
+import { createGmailHttpServer } from '@email-connect/gmail';
 
 async function jsonFetch(url: string, init?: RequestInit) {
   const response = await fetch(url, init);
@@ -20,7 +20,7 @@ async function formFetch(url: string, body: Record<string, string>) {
   });
 }
 
-const server = new EmailConnectHttpServer();
+const server = createGmailHttpServer();
 const { baseUrl, adminToken } = await server.listen();
 
 try {

@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import {
-  EmailConnectEngine,
   beginGraphAuthorization,
   approveGraphAuthorization,
+  createGraphEngine,
   exchangeGraphAuthorizationCode,
   getOutlookGraphClientForMailbox,
   refreshGraphAuthorization,
   registerGraphOAuthClient,
-} from '../src/index.js';
+} from '@email-connect/graph';
 
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 
 engine.createMailbox({
   id: 'graph-connect-advanced',

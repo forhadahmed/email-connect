@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getGmailClientForMailbox } from '../src/index.js';
+import { createGmailEngine, getGmailClientForMailbox } from '@email-connect/gmail';
 
 /**
  * Basic Gmail RX example:
  * - the outside world injects one inbound message into the mailbox
  * - the inside world lists it and opens it through the Gmail facade
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGmailEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'gmail-rx-basic',
   provider: 'gmail',

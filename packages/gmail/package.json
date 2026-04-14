@@ -1,0 +1,21 @@
+{
+  "name": "@email-connect/gmail",
+  "version": "0.1.0",
+  "description": "Gmail provider package for email-connect.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@email-connect/core": "file:../core"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  }
+}

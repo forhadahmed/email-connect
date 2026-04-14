@@ -17,22 +17,14 @@ It is designed to serve two equally important use cases from one canonical behav
 
 ## Architecture
 
-- `src/core`
-  - provider-neutral mailbox state, deterministic ids, clock, and typed scenario inputs
-- `src/engine`
-  - canonical simulation engine and white-box control surface
-- `src/connect`
-  - canonical OAuth/connect plane: clients, consent, auth codes, token exchange, refresh, revoke, and grant state
-- `src/providers/gmail`
+- `packages/core`
+  - provider-neutral mailbox state, deterministic ids, clock, control plane, generation, and the generic HTTP host
+- `packages/gmail`
   - Gmail-specific label, history, draft, attachment, userinfo, and connect semantics
-- `src/providers/graph`
+- `packages/graph`
   - Graph-specific delta, draft, attachment, and connect semantics
-- `src/control`
-  - state mutation, scenario loading, inspection, and fault injection helpers
-- `src/server/http`
-  - first-class HTTP facade for Gmail-compatible and Graph-compatible endpoints plus control routes
-- `src/testing`
-  - high-level scenario helpers and assertion utilities for tests
+- `src`
+  - the combined convenience package that installs both providers for the zero-config path
 
 ## Project Contract
 
@@ -40,6 +32,44 @@ It is designed to serve two equally important use cases from one canonical behav
 - Provider identity and mailbox-state evolution do belong in this repository.
 - HTTP and SDK surfaces must stay behaviorally equivalent.
 - New fidelity should land in the canonical engine first, then get exercised through both SDK and HTTP tests.
+
+## Package Shapes
+
+You can consume `email-connect` in the simplest shape that matches your product:
+
+- `email-connect`
+  - combined convenience package with Gmail and Graph installed
+- `@email-connect/core`
+  - engine, control plane, generation, and generic HTTP host
+- `@email-connect/gmail`
+  - Gmail-only provider semantics, SDK helpers, and Gmail-only HTTP convenience helpers
+- `@email-connect/graph`
+  - Graph-only provider semantics, SDK helpers, and Graph-only HTTP convenience helpers
+
+That lets a downstream product choose:
+
+- Gmail only: `@email-connect/core` + `@email-connect/gmail`
+- Graph only: `@email-connect/core` + `@email-connect/graph`
+- Both providers: `email-connect` or `@email-connect/core` + both provider packages
+
+Typical usage looks like:
+
+```ts
+import { EmailConnectEngine } from '@email-connect/core';
+import { getGmailClientForMailbox, gmailProvider } from '@email-connect/gmail';
+
+const engine = new EmailConnectEngine({
+  providers: [gmailProvider],
+});
+
+engine.createMailbox({
+  id: 'ops',
+  provider: 'gmail',
+  primaryEmail: 'ops@example.com',
+});
+
+const gmail = getGmailClientForMailbox(engine, 'ops');
+```
 
 ## Status
 
@@ -144,3 +174,15 @@ For a consumer like `microtms-next`, that is the intended split:
   refresh, revoke, and mailbox capability effects
 - the consuming app still owns its own browser session, tenant routing, and
   application-auth concerns
+
+## Examples
+
+The examples are intentionally written against the public packages rather than
+workspace-relative internals:
+
+- Gmail examples use `@email-connect/gmail`
+- Graph examples use `@email-connect/graph`
+- generation examples show explicit `@email-connect/core` + provider composition
+
+That makes the example set double as packaging documentation for downstream
+consumers.

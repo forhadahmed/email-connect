@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/index.js';
+import { createGraphEngine, getOutlookGraphClientForMailbox } from '@email-connect/graph';
 
 /**
  * Advanced Microsoft Graph TX example:
@@ -7,7 +7,7 @@ import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/inde
  * - patch the draft with an HTML body
  * - send it and inspect the recorded outbound message
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'graph-tx-advanced',
   provider: 'graph',

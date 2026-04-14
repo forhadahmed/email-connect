@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/index.js';
+import { createGraphEngine, getOutlookGraphClientForMailbox } from '@email-connect/graph';
 
 /**
  * Adversarial Graph RX example:
@@ -7,7 +7,7 @@ import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/inde
  * - show the expected 410 / SyncStateInvalid failure
  * - show the recovery pattern of restarting from a fresh delta bootstrap
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'graph-delta-reset',
   provider: 'graph',

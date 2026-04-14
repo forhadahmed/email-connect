@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {
-  EmailConnectEngine,
   createGmailDraft,
+  createGmailEngine,
   sendGmailReplyDraft,
-} from '../src/index.js';
+} from '@email-connect/gmail';
 
 /**
  * Basic Gmail TX example:
@@ -11,7 +11,7 @@ import {
  * - the app sends it
  * - the test asserts against the harness outbox
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGmailEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'gmail-tx-basic',
   provider: 'gmail',

@@ -1,11 +1,15 @@
-export { EmailConnectEngine } from './engine/email-connect-engine.js';
-export { loadScenario } from './control/scenario.js';
+import {
+  EmailConnectEngine as CoreEmailConnectEngine,
+  type EmailConnectEngineOptions,
+} from '@email-connect/core';
+import { gmailProvider } from '@email-connect/gmail';
+import { graphProvider } from '@email-connect/graph';
+
 export {
+  loadScenario,
   createArrayTemplateSource,
   createCallbackTemplateSource,
   generateMailboxEmails,
-} from './testing/generation.js';
-export {
   registerOAuthClient,
   beginOAuthAuthorization,
   approveOAuthAuthorization,
@@ -13,9 +17,13 @@ export {
   exchangeAuthorizationCode,
   refreshAuthorizationGrant,
   revokeAuthorizationToken,
-} from './connect/sdk.js';
-export { getGmailClientForMailbox, downloadGmailAttachment, createGmailDraft, createGmailReplyDraft, sendGmailReplyDraft } from './providers/gmail/sdk.js';
+} from '@email-connect/core';
 export {
+  getGmailClientForMailbox,
+  downloadGmailAttachment,
+  createGmailDraft,
+  createGmailReplyDraft,
+  sendGmailReplyDraft,
   registerGmailOAuthClient,
   beginGmailAuthorization,
   approveGmailAuthorization,
@@ -23,14 +31,40 @@ export {
   exchangeGmailAuthorizationCode,
   refreshGmailAuthorization,
   revokeGmailAuthorization,
-} from './providers/gmail/connect-sdk.js';
-export { getOutlookGraphClientForMailbox, downloadOutlookAttachment, createOutlookDraft, createOutlookReplyDraft, sendOutlookReplyDraft } from './providers/graph/sdk.js';
+  createGmailEngine,
+  createGmailHttpServer,
+  gmailProvider,
+} from '@email-connect/gmail';
 export {
+  getOutlookGraphClientForMailbox,
+  downloadOutlookAttachment,
+  createOutlookDraft,
+  createOutlookReplyDraft,
+  sendOutlookReplyDraft,
   registerGraphOAuthClient,
   beginGraphAuthorization,
   approveGraphAuthorization,
   denyGraphAuthorization,
   exchangeGraphAuthorizationCode,
   refreshGraphAuthorization,
-} from './providers/graph/connect-sdk.js';
-export type * from './core/types.js';
+  createGraphEngine,
+  createGraphHttpServer,
+  graphProvider,
+} from '@email-connect/graph';
+export type * from '@email-connect/core';
+
+/**
+ * The root package is the convenience "both providers included" product.
+ *
+ * Provider-specific packages can be sold and consumed independently, but the
+ * top-level `email-connect` package preserves the zero-config path that the
+ * repo used before the split.
+ */
+export class EmailConnectEngine extends CoreEmailConnectEngine {
+  constructor(options?: Omit<EmailConnectEngineOptions, 'providers'> & { providers?: EmailConnectEngineOptions['providers'] }) {
+    super({
+      ...options,
+      providers: [gmailProvider, graphProvider, ...(options?.providers || [])],
+    });
+  }
+}

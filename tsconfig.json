@@ -15,8 +15,15 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@email-connect/core": ["packages/core/src/index.ts"],
+      "@email-connect/core/server": ["packages/core/src/server/index.ts"],
+      "@email-connect/gmail": ["packages/gmail/src/index.ts"],
+      "@email-connect/graph": ["packages/graph/src/index.ts"]
+    },
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "packages/**/*.ts", "test/**/*.ts", "examples/**/*.ts", "vitest.config.ts"]
 }

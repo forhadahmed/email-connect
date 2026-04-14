@@ -1,9 +1,12 @@
 {
   "name": "email-connect",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "A standalone Gmail and Microsoft Graph mail simulation harness with first-class HTTP facades and embeddable SDK surfaces.",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -17,14 +20,19 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run build --workspace=@email-connect/core && npm run build --workspace=@email-connect/gmail && npm run build --workspace=@email-connect/graph && tsc -p tsconfig.build.json",
+    "check": "npm run build --workspace=@email-connect/core && npm run check --workspace=@email-connect/core && npm run check --workspace=@email-connect/gmail && npm run check --workspace=@email-connect/graph && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist coverage"
+    "clean": "rm -rf dist coverage packages/core/dist packages/gmail/dist packages/graph/dist"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@email-connect/core": "file:packages/core",
+    "@email-connect/gmail": "file:packages/gmail",
+    "@email-connect/graph": "file:packages/graph"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",

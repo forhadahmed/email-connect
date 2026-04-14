@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@email-connect/core": ["../core/dist/index.d.ts"],
+      "@email-connect/core/server": ["../core/dist/server/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {
-  EmailConnectEngine,
+  createGraphEngine,
   downloadOutlookAttachment,
   getOutlookGraphClientForMailbox,
-} from '../src/index.js';
+} from '@email-connect/graph';
 
 /**
  * Advanced Microsoft Graph RX example:
@@ -11,7 +11,7 @@ import {
  * - walk a threaded message
  * - download an attachment through the `$value` fallback path
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'graph-rx-advanced',
   provider: 'graph',

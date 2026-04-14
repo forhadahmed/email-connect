@@ -3,14 +3,18 @@ import {
   EmailConnectEngine,
   createCallbackTemplateSource,
   generateMailboxEmails,
-} from '../src/index.js';
+} from '@email-connect/core';
+import { gmailProvider } from '@email-connect/gmail';
 
 /**
  * Generated mailbox example:
  * - use the generation data plane instead of manually inserting rows
  * - simulate a busier inbox with reply chains and attachments
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = new EmailConnectEngine({
+  baseTime: '2026-04-14T12:00:00.000Z',
+  providers: [gmailProvider],
+});
 engine.createMailbox({
   id: 'generated-busy',
   provider: 'gmail',

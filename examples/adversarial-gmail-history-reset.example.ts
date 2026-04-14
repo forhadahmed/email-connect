@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getGmailClientForMailbox } from '../src/index.js';
+import { createGmailEngine, getGmailClientForMailbox } from '@email-connect/gmail';
 
 /**
  * Adversarial Gmail RX example:
@@ -7,7 +7,7 @@ import { EmailConnectEngine, getGmailClientForMailbox } from '../src/index.js';
  * - show the expected provider failure
  * - show the recovery pattern of re-bootstrapping from profile historyId
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGmailEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'gmail-history-reset',
   provider: 'gmail',

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/index.js';
+import { createGraphEngine, getOutlookGraphClientForMailbox } from '@email-connect/graph';
 
 /**
  * Basic Microsoft Graph RX example:
@@ -7,7 +7,7 @@ import { EmailConnectEngine, getOutlookGraphClientForMailbox } from '../src/inde
  * - list it via the Graph inbox route
  * - open the message details
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGraphEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'graph-rx-basic',
   provider: 'graph',

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { EmailConnectEngine, getGmailClientForMailbox } from '../src/index.js';
+import { createGmailEngine, getGmailClientForMailbox } from '@email-connect/gmail';
 import { buildMultipartAlternativeRawEmail, encodeBase64Url } from './helpers.js';
 
 /**
@@ -8,7 +8,7 @@ import { buildMultipartAlternativeRawEmail, encodeBase64Url } from './helpers.js
  * - multipart text + HTML body
  * - inspect the outbound message recorded by the harness
  */
-const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+const engine = createGmailEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
 engine.createMailbox({
   id: 'gmail-tx-advanced',
   provider: 'gmail',

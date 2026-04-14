@@ -9,6 +9,14 @@ Each file is a plain runnable script with `node:assert` assertions instead of a
 test-framework wrapper. They compile under `npm run check`, but they do not run
 as part of the default `npm test` command.
 
+The examples intentionally use the public package surfaces:
+
+- Gmail examples import from `@email-connect/gmail`
+- Graph examples import from `@email-connect/graph`
+- shared generation examples import from `@email-connect/core` plus an explicit provider package
+
+That mirrors how a real consumer would buy and compose the project.
+
 ## White-Box SDK Matrix
 
 - Gmail basic receive: [basic-receive-gmail.example.ts](./basic-receive-gmail.example.ts)
