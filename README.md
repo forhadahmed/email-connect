@@ -1,0 +1,146 @@
+# email-connect
+
+`email-connect` is a standalone provider simulation harness for Gmail and Microsoft Graph mailbox flows and mailbox-connect OAuth flows.
+
+It is designed to serve two equally important use cases from one canonical behavior engine:
+
+- black-box use: a real HTTP server exposing Gmail-like and Graph-like API contracts for polyglot integration tests
+- white-box use: an embeddable TypeScript SDK that lets tests drive mailbox state, time, replay, and failure injection directly
+
+## Design Goals
+
+- Canonical provider semantics, not app-specific business logic.
+- One behavior engine shared by HTTP and in-process use.
+- Deterministic mailbox scenarios for CI.
+- Rich adversarial controls: replay, stale cursors, transient failures, auth failures, throttling, and data drift.
+- Clean enough boundaries that a product like `microtms-next` can later consume the harness without carrying over app-local concepts such as `branch_id`, `sync_revision`, or UTMS orchestration.
+
+## Architecture
+
+- `src/core`
+  - provider-neutral mailbox state, deterministic ids, clock, and typed scenario inputs
+- `src/engine`
+  - canonical simulation engine and white-box control surface
+- `src/connect`
+  - canonical OAuth/connect plane: clients, consent, auth codes, token exchange, refresh, revoke, and grant state
+- `src/providers/gmail`
+  - Gmail-specific label, history, draft, attachment, userinfo, and connect semantics
+- `src/providers/graph`
+  - Graph-specific delta, draft, attachment, and connect semantics
+- `src/control`
+  - state mutation, scenario loading, inspection, and fault injection helpers
+- `src/server/http`
+  - first-class HTTP facade for Gmail-compatible and Graph-compatible endpoints plus control routes
+- `src/testing`
+  - high-level scenario helpers and assertion utilities for tests
+
+## Project Contract
+
+- App-specific policy does not belong in this repository.
+- Provider identity and mailbox-state evolution do belong in this repository.
+- HTTP and SDK surfaces must stay behaviorally equivalent.
+- New fidelity should land in the canonical engine first, then get exercised through both SDK and HTTP tests.
+
+## Status
+
+This repository starts with:
+
+- a deterministic mailbox engine
+- a connect plane for mailbox OAuth flows
+- Gmail and Graph mailbox facades
+- Google-style and Microsoft-style authorization/token facades
+- HTTP routes for the core read/sync/draft/attachment seams
+- HTTP routes for `/authorize`, token exchange, refresh, revoke, and consent
+- control-plane APIs for seed, replay, fault injection, and inspection
+- provider-backed compose flows for direct send, reply drafts, and HTML-capable bodies
+- deterministic email generation for quiet, steady, busy, and bursty inboxes
+- consumer-facing white-box and black-box examples under [examples/](./examples/README.md)
+
+Further fidelity work should extend provider semantics rather than bolt on test-only one-offs.
+
+## Current Provider Fidelity
+
+The current mail-plane implementation covers the seams that a consumer like
+`microtms-next` actually exercises today:
+
+- Gmail:
+  - OAuth `/authorize`, `/token`, `/revoke`, and OIDC-style `userinfo`
+  - consent approval/denial, auth codes, refresh tokens, and refresh-token omission on repeated offline auth without re-consent
+  - Google incremental consent through `include_granted_scopes=true`
+  - `users.getProfile`
+  - `users.labels.list`
+  - `users.messages.list/get/send`
+  - `users.messages.attachments.get`
+  - `users.history.list`
+  - `users.drafts.create/send`
+  - hidden labels, stale `historyId`, replayed history items, and history-type filtering
+- Microsoft Graph mail:
+  - Microsoft-style `/authorize` and `/token` flows with delegated mail scopes and refresh-token rotation
+  - provider-shaped `access_denied` authorization redirects with `error_description`
+  - `/me`
+  - `/me/messages`
+  - `/me/mailFolders/inbox/messages`
+  - `/me/mailFolders/inbox/messages/delta`
+  - message detail, attachments list/get, attachment `$value`
+  - `createReply`, draft create/patch/send, and draft delete
+  - stale delta tokens, opaque continuation links, inline attachment omission, and HTML draft bodies
+
+## Generation Model
+
+`email-connect` treats mailbox simulation as a data-plane problem, not just an
+endpoint-mocking problem.
+
+Today you can generate mail from:
+
+- corpus-backed template arrays
+- programmatic callbacks
+- deterministic timeline profiles:
+  - `quiet`
+  - `steady`
+  - `busy`
+  - `bursty`
+
+Generation supports:
+
+- sender/recipient pools
+- reply/thread density controls
+- attachment injection
+- deterministic seeded output
+- realistic thread headers such as `In-Reply-To` and `References`
+
+That keeps tests close to user intent:
+"simulate a busy inbox with deep threads" instead of "insert 500 rows."
+
+## Fault Injection
+
+Backend config supports:
+
+- latency
+- transient failures: `429`, `503`, `timeout`, `disconnect`
+- auth failures: `invalid_grant`, `forbidden`
+
+Operation filters intentionally accept both:
+
+- provider-qualified names such as `gmail.history.list`
+- consumer-friendly names such as `history.list`
+
+That keeps the public harness ergonomic while staying compatible with the
+operation naming patterns already used in `microtms-next`.
+
+## Connect Plane Notes
+
+The current connect plane focuses on mailbox-connect flows rather than general
+identity-login product behavior.
+
+That means:
+
+- provider-side OAuth and consent behavior is in scope
+- mailbox grant state is linked to the simulated mail plane
+- app-local session behavior is still out of scope
+
+For a consumer like `microtms-next`, that is the intended split:
+
+- `email-connect` owns provider `/authorize`, consent, code exchange, token
+  refresh, revoke, and mailbox capability effects
+- the consuming app still owns its own browser session, tenant routing, and
+  application-auth concerns
