@@ -55,6 +55,8 @@ export function registerOAuthClient(engine: EmailConnectEngine, input: OAuthClie
   return engine.connect.registerClient(input);
 }
 
+// Start an embeddable OAuth flow and return both the provider-shaped URL and
+// the request snapshot a white-box test can approve or deny.
 export function beginOAuthAuthorization(params: {
   engine: EmailConnectEngine;
   provider: ProviderKind;
@@ -116,6 +118,8 @@ export function beginOAuthAuthorization(params: {
   };
 }
 
+// Approve a pending request without driving the interactive consent page. This
+// is the main white-box seam for deterministic connect tests.
 export function approveOAuthAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -128,6 +132,8 @@ export function approveOAuthAuthorization(params: {
   });
 }
 
+// Deny a pending request with provider-shaped error details so callback
+// handling can be tested without browser interaction.
 export function denyOAuthAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -141,6 +147,8 @@ export function denyOAuthAuthorization(params: {
   );
 }
 
+// Exchange an auth code through the same core checks used by black-box token
+// endpoints: client, redirect URI, expiry, reuse, and PKCE.
 export function exchangeAuthorizationCode(params: {
   engine: EmailConnectEngine;
   provider: ProviderKind;
@@ -160,6 +168,8 @@ export function exchangeAuthorizationCode(params: {
   });
 }
 
+// Refresh a mailbox grant through the canonical connect plane, including
+// provider-specific rotation and scope behavior.
 export function refreshAuthorizationGrant(params: {
   engine: EmailConnectEngine;
   provider: ProviderKind;
@@ -177,6 +187,8 @@ export function refreshAuthorizationGrant(params: {
   });
 }
 
+// Revoke either an access or refresh token from white-box tests while preserving
+// the same grant-state mutations as provider revoke endpoints.
 export function revokeAuthorizationToken(params: {
   engine: EmailConnectEngine;
   provider: ProviderKind;

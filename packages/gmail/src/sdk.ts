@@ -80,10 +80,15 @@ export type GmailClient = {
  * downstream tests can switch between mock and real client code with minimal
  * ceremony.
  */
+// Gmail SDK ids in some helper flows use deterministic hashes so repeated
+// fixture input produces stable draft/message identifiers.
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+// Build a Gmail-like nested client around the canonical service. The shape is
+// intentionally close to common Google client libraries, but it never bypasses
+// the same service code used by HTTP routes.
 export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: string): GmailClient {
   const service = new GmailService(engine);
   return {

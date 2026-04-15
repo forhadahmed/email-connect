@@ -21,6 +21,8 @@ export function registerGraphOAuthClient(
   });
 }
 
+// Start a Microsoft-shaped white-box authorization flow, including the Graph
+// scope bundle and tenant-shaped endpoints exposed by the provider package.
 export function beginGraphAuthorization(params: {
   engine: EmailConnectEngine;
   baseUrl: string;
@@ -43,6 +45,7 @@ export function beginGraphAuthorization(params: {
   });
 }
 
+// Approve a pending Graph consent request without rendering the browser page.
 export function approveGraphAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -52,6 +55,7 @@ export function approveGraphAuthorization(params: {
   return approveOAuthAuthorization(params);
 }
 
+// Deny a pending Graph consent request with Microsoft-style callback errors.
 export function denyGraphAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -61,6 +65,7 @@ export function denyGraphAuthorization(params: {
   return denyOAuthAuthorization(params);
 }
 
+// Exchange a Graph auth code through the shared core OAuth state machine.
 export function exchangeGraphAuthorizationCode(params: {
   engine: EmailConnectEngine;
   clientId: string;
@@ -75,6 +80,8 @@ export function exchangeGraphAuthorizationCode(params: {
   });
 }
 
+// Refresh a Graph mailbox grant, including Microsoft-style refresh-token
+// rotation when the provider semantics require it.
 export function refreshGraphAuthorization(params: {
   engine: EmailConnectEngine;
   clientId: string;

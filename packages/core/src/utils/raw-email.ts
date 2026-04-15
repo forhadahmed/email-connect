@@ -36,18 +36,34 @@ export type RawEmailRenderInput = {
   attachments?: RawEmailAttachmentPart[];
 };
 
+// Keep MIME grammar fragments named. These are intentionally small, practical
+// patterns for provider-test fixtures rather than a full RFC parser.
+const MIME_BOUNDARY_PARAMETER_PATTERN = /boundary="?([^";]+)"?/i;
+const MIME_FILENAME_PARAMETER_PATTERN = /filename="?([^";]+)"?/i;
+const MIME_NAME_PARAMETER_PATTERN = /name="?([^";]+)"?/i;
+const MIME_LINE_BREAK_PATTERN = /\r?\n/;
+const MIME_LINE_BREAK_GLOBAL_PATTERN = /\r?\n/g;
+const MIME_HEADER_BODY_SEPARATOR_PATTERN = /\r?\n\r?\n/;
+const MIME_CLOSING_BOUNDARY_SUFFIX_PATTERN = /--$/;
+const MIME_CONTENT_ID_WRAPPER_PATTERN = /[<>]/g;
+const BASE64URL_MARKER_PATTERN = /[-_]/;
+
 // MIME parsing here is intentionally practical rather than exhaustive. The
 // goal is to support the raw-message seams that provider mocks expose, not to
 // become a full general-purpose email parser.
+// Boundary extraction is deliberately small because the renderer below emits
+// simple quoted boundaries and the parser targets those provider-test shapes.
 function extractBoundary(contentType: string | undefined): string | null {
   if (!contentType) return null;
-  const match = contentType.match(/boundary="?([^";]+)"?/i);
+  const match = contentType.match(MIME_BOUNDARY_PARAMETER_PATTERN);
   return match?.[1] ? String(match[1]).trim() : null;
 }
 
+// Parse headers into lower-case keys for easier lookup while preserving the
+// original rendered header names elsewhere when provider resources need them.
 function parseHeadersBlock(block: string): Record<string, string> {
   const headers: Record<string, string> = {};
-  for (const line of String(block || '').split(/\r?\n/)) {
+  for (const line of String(block || '').split(MIME_LINE_BREAK_PATTERN)) {
     const idx = line.indexOf(':');
     if (idx <= 0) continue;
     const name = line.slice(0, idx).trim().toLowerCase();
@@ -57,24 +73,29 @@ function parseHeadersBlock(block: string): Record<string, string> {
   return headers;
 }
 
+// Attachment names can appear in Content-Disposition or Content-Type depending
+// on which client generated the MIME part.
 function filenameFromHeaders(headers: Record<string, string>): string | null {
   const contentDisposition = String(headers['content-disposition'] || '');
-  const dispositionMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  const dispositionMatch = contentDisposition.match(MIME_FILENAME_PARAMETER_PATTERN);
   if (dispositionMatch?.[1]) return String(dispositionMatch[1]).trim();
   const contentType = String(headers['content-type'] || '');
-  const typeMatch = contentType.match(/name="?([^";]+)"?/i);
+  const typeMatch = contentType.match(MIME_NAME_PARAMETER_PATTERN);
   if (typeMatch?.[1]) return String(typeMatch[1]).trim();
   return null;
 }
 
+// Decode the encodings the harness emits and common client fixtures use.
 function decodePartBody(body: string, transferEncoding: string): Uint8Array {
-  const normalized = body.replace(/\r?\n/g, '');
+  const normalized = body.replace(MIME_LINE_BREAK_GLOBAL_PATTERN, '');
   if (transferEncoding.toLowerCase() === 'base64') {
     return new Uint8Array(Buffer.from(normalized, 'base64'));
   }
   return new Uint8Array(Buffer.from(body, 'utf8'));
 }
 
+// Multipart parsing may recurse through alternative bodies; merge keeps the
+// first text/html body and accumulates attachments.
 function mergeBodyParts(
   target: { bodyText: string; bodyHtml: string | null; attachments: RawEmailAttachmentPart[] },
   source: { bodyText: string; bodyHtml: string | null; attachments: RawEmailAttachmentPart[] },
@@ -84,12 +105,12 @@ function mergeBodyParts(
   target.attachments.push(...source.attachments);
 }
 
+// Multipart parsing preserves the pieces provider mocks actually surface:
+// plain text, HTML, file attachments, and inline content ids.
 function parseMultipartBody(
   body: string,
   boundary: string,
 ): { bodyText: string; bodyHtml: string | null; attachments: RawEmailAttachmentPart[] } {
-  // Multipart parsing preserves the pieces provider mocks actually surface:
-  // plain text, HTML, file attachments, and inline content ids.
   const marker = `--${boundary}`;
   const segments = body
     .split(marker)
@@ -103,7 +124,9 @@ function parseMultipartBody(
   };
 
   for (const segment of segments) {
-    const [partHeaderBlock, ...partBodyParts] = segment.replace(/--$/, '').split(/\r?\n\r?\n/);
+    const [partHeaderBlock, ...partBodyParts] = segment
+      .replace(MIME_CLOSING_BOUNDARY_SUFFIX_PATTERN, '')
+      .split(MIME_HEADER_BODY_SEPARATOR_PATTERN);
     const partHeaders = parseHeadersBlock(partHeaderBlock || '');
     const content = partBodyParts.join('\n\n').trim();
     const contentType = String(partHeaders['content-type'] || '').toLowerCase();
@@ -126,7 +149,7 @@ function parseMultipartBody(
         contentBytes: decodePartBody(content, String(partHeaders['content-transfer-encoding'] || '')),
         ...(contentDisposition.includes('inline') ? { isInline: true } : {}),
         ...(partHeaders['content-id']
-          ? { contentId: String(partHeaders['content-id']).replace(/[<>]/g, '').trim() || null }
+          ? { contentId: String(partHeaders['content-id']).replace(MIME_CONTENT_ID_WRAPPER_PATTERN, '').trim() || null }
           : {}),
       });
       continue;
@@ -143,8 +166,10 @@ function parseMultipartBody(
   return parsed;
 }
 
+// Parse one decoded RFC822-ish message into the canonical raw-email structure
+// used by Gmail raw send/import and Graph MIME send.
 function parseRawEmail(decoded: string): ParsedRawEmail {
-  const [headerBlock, ...bodyParts] = decoded.split(/\r?\n\r?\n/);
+  const [headerBlock, ...bodyParts] = decoded.split(MIME_HEADER_BODY_SEPARATOR_PATTERN);
   const headers = parseHeadersBlock(headerBlock || '');
   const body = bodyParts.join('\n\n').trim();
   const contentType = String(headers['content-type'] || '').toLowerCase();
@@ -184,6 +209,7 @@ function parseRawEmail(decoded: string): ParsedRawEmail {
   };
 }
 
+// Render standard headers once so Gmail raw and Graph `$value` stay aligned.
 function baseMimeHeaders(input: RawEmailRenderInput): string[] {
   const headers: string[] = [];
   if (input.from) headers.push(`From: ${input.from}`);
@@ -212,6 +238,8 @@ function baseMimeHeaders(input: RawEmailRenderInput): string[] {
   return headers;
 }
 
+// Body rendering chooses single-part text/html or multipart/alternative based
+// on the canonical body fields.
 function renderAlternativeBody(input: RawEmailRenderInput): { contentType: string; body: string } {
   const bodyText = String(input.bodyText || '');
   const bodyHtml = input.bodyHtml == null ? null : String(input.bodyHtml);
@@ -301,11 +329,15 @@ export function parseRawEmailBase64Url(raw: string): ParsedRawEmail {
   return parseRawEmail(decodeBase64Url(raw));
 }
 
+// Some provider APIs and client libraries are inconsistent about base64 vs
+// base64url. Accept both at this seam to keep examples and tests ergonomic.
 export function parseRawEmailBase64(raw: string): ParsedRawEmail {
-  const bytes = /[-_]/.test(raw) ? decodeBase64UrlToBytes(raw) : decodeBase64ToBytes(raw);
+  const bytes = BASE64URL_MARKER_PATTERN.test(raw) ? decodeBase64UrlToBytes(raw) : decodeBase64ToBytes(raw);
   return parseRawEmail(Buffer.from(bytes).toString('utf8'));
 }
 
+// Canonical address inputs accept strings or arrays because Graph and Gmail
+// compose helpers naturally start from different shapes.
 export function normalizeAddressInput(value: string | string[] | null | undefined): string | null {
   if (value == null) return null;
   if (Array.isArray(value)) {

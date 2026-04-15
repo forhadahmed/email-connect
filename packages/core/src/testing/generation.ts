@@ -4,6 +4,10 @@ import { SeededRandom } from '../utils/rng.js';
 
 export type MailboxEmailProfile = 'quiet' | 'steady' | 'busy' | 'bursty';
 
+// Threaded generated messages should preserve existing reply prefixes rather
+// than stacking synthetic `Re:` values on every generated child.
+const REPLY_PREFIX_PATTERN = /^\s*re:/i;
+
 /**
  * Template sources describe message content, while the generation plan
  * describes tempo and conversation shape. Keeping those concerns separate makes
@@ -31,9 +35,14 @@ export interface MessageTemplateSource {
   nextTemplate(context: TemplateRequestContext): Promise<GeneratedTemplate> | GeneratedTemplate;
 }
 
+// Array-backed sources cycle through a fixed corpus, which is useful for
+// deterministic domain examples such as insurance packets or dispatch mail.
 class ArrayTemplateSource implements MessageTemplateSource {
+  // Cursor advancement is deterministic and local to this source instance.
   private cursor = 0;
 
+  // Hold the corpus by reference so callers can intentionally share lightweight
+  // immutable fixture arrays across generation plans.
   constructor(private readonly items: GeneratedTemplate[]) {}
 
   nextTemplate(): GeneratedTemplate {
@@ -53,7 +62,11 @@ class ArrayTemplateSource implements MessageTemplateSource {
   }
 }
 
+// Callback-backed sources let consumers generate mail from code while still
+// using the engine's timeline, threading, and attachment machinery.
 class CallbackTemplateSource implements MessageTemplateSource {
+  // The callback is the only source of content; timeline and threading still
+  // come from the generation plan.
   constructor(private readonly callback: (context: TemplateRequestContext) => Promise<GeneratedTemplate> | GeneratedTemplate) {}
 
   nextTemplate(context: TemplateRequestContext): Promise<GeneratedTemplate> | GeneratedTemplate {
@@ -61,10 +74,13 @@ class CallbackTemplateSource implements MessageTemplateSource {
   }
 }
 
+// Public factory keeps callers from depending on the concrete source class.
 export function createArrayTemplateSource(items: GeneratedTemplate[]): MessageTemplateSource {
   return new ArrayTemplateSource(items);
 }
 
+// Public factory for programmatic corpora, useful when messages depend on the
+// generated timestamp, thread depth, or random seed.
 export function createCallbackTemplateSource(
   callback: (context: TemplateRequestContext) => Promise<GeneratedTemplate> | GeneratedTemplate,
 ): MessageTemplateSource {
@@ -98,12 +114,16 @@ export type EmailGenerationPlan = {
   syntheticAttachmentFactory?: (context: TemplateRequestContext) => AttachmentSeed | null;
 };
 
+// Generation accepts loose date inputs but normalizes once before timeline
+// construction so profiles behave consistently.
 function normalizeDate(value: string | Date | undefined, fallback: Date): Date {
   if (!value) return fallback;
   const parsed = value instanceof Date ? value : new Date(value);
   return Number.isNaN(parsed.getTime()) ? fallback : parsed;
 }
 
+// Probability knobs are clamped rather than rejected so scenario files remain
+// forgiving while still producing deterministic output.
 function clampProbability(value: number | undefined, fallback: number): number {
   if (value == null || !Number.isFinite(value)) return fallback;
   if (value <= 0) return 0;
@@ -111,6 +131,8 @@ function clampProbability(value: number | undefined, fallback: number): number {
   return value;
 }
 
+// Build a deterministic timeline from a workload profile. This is the core of
+// the "quiet vs busy vs bursty inbox" product behavior.
 function buildTimeline(params: {
   count: number;
   startAt: Date;
@@ -158,6 +180,8 @@ function buildTimeline(params: {
   return result.map((entry) => new Date(entry).toISOString());
 }
 
+// Default generated attachments are small and textual; heavier binary profiles
+// can replace this through `syntheticAttachmentFactory`.
 function syntheticAttachment(context: TemplateRequestContext): AttachmentSeed {
   return {
     filename: `attachment-${context.index + 1}.txt`,
@@ -234,7 +258,7 @@ export async function generateMailboxEmails(
     const to = template.to || recipients[index % recipients.length]!;
 
     const messageSeed: MessageSeed = {
-      subject: thread ? (/^\s*re:/i.test(subjectBase) ? subjectBase : `Re: ${thread.rootSubject || subjectBase}`) : subjectBase,
+      subject: thread ? (REPLY_PREFIX_PATTERN.test(subjectBase) ? subjectBase : `Re: ${thread.rootSubject || subjectBase}`) : subjectBase,
       from,
       to,
       bodyText: template.bodyText || `Generated mailbox traffic body #${index + 1}`,

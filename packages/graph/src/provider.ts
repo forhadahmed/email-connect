@@ -2,6 +2,22 @@ import { EmailConnectError, type EmailConnectProvider, type MailboxRecord } from
 import { defaultGraphScopesForCapabilityMode, isGraphOperationAuthorized } from './capabilities.js';
 import { GraphService, parsePreferBodyContentType } from './service.js';
 
+// Graph has many nearby resource paths. Centralizing captures here makes the
+// provider facade easier to audit against Microsoft route documentation.
+const GRAPH_AUTHORIZE_ROUTE_PATTERN = /^\/([^/]+)\/oauth2\/v2\.0\/authorize$/;
+const GRAPH_TOKEN_ROUTE_PATTERN = /^\/([^/]+)\/oauth2\/v2\.0\/token$/;
+const GRAPH_MESSAGE_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)$/;
+const GRAPH_MESSAGE_VALUE_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/\$value$/;
+const GRAPH_ATTACHMENTS_LIST_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments$/;
+const GRAPH_ATTACHMENT_VALUE_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/([^/]+)\/\$value$/;
+const GRAPH_ATTACHMENT_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/;
+const GRAPH_UPLOAD_SESSION_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/createUploadSession$/;
+const GRAPH_CREATE_REPLY_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/createReply$/;
+const GRAPH_SEND_DRAFT_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/send$/;
+const GRAPH_MOVE_MESSAGE_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/move$/;
+const GRAPH_COPY_MESSAGE_ROUTE_PATTERN = /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/copy$/;
+
+// Graph `/me` and connect userinfo surfaces use this mailbox identity projection.
 function graphUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   return {
     id: mailbox.providerUserId,
@@ -55,6 +71,8 @@ export const graphProvider: EmailConnectProvider = {
     },
   },
   http: {
+    // The provider handler is the black-box Microsoft facade: it keeps route
+    // shape, auth checks, and GraphService delegation in one audited seam.
     async handle(context) {
       const { method, url } = context;
       const pathname = url.pathname;
@@ -63,7 +81,7 @@ export const graphProvider: EmailConnectProvider = {
       // to the mock host itself so non-JS consumers can follow them directly.
       const facadeBaseUrl = url.origin;
 
-      const authorizeMatch = context.matchPath(pathname, /^\/([^/]+)\/oauth2\/v2\.0\/authorize$/);
+      const authorizeMatch = context.matchPath(pathname, GRAPH_AUTHORIZE_ROUTE_PATTERN);
       // The authorize/token endpoints stay tenant-shaped because many products
       // carry those URLs directly in configuration.
       if (method === 'GET' && authorizeMatch?.[1]) {
@@ -91,7 +109,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const tokenMatch = context.matchPath(pathname, /^\/([^/]+)\/oauth2\/v2\.0\/token$/);
+      const tokenMatch = context.matchPath(pathname, GRAPH_TOKEN_ROUTE_PATTERN);
       if (method === 'POST' && tokenMatch?.[1]) {
         const body = await context.readFormBody();
         const grantType = String(body.grant_type || '').trim();
@@ -193,7 +211,7 @@ export const graphProvider: EmailConnectProvider = {
 
       // Message and attachment resource routes are grouped ahead of compose so
       // the file follows the same read-first flow most Graph consumers do.
-      const messageMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)$/);
+      const messageMatch = context.matchPath(pathname, GRAPH_MESSAGE_ROUTE_PATTERN);
       if (method === 'GET' && messageMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.get');
         context.sendJson(
@@ -204,7 +222,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const messageValueMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/\$value$/);
+      const messageValueMatch = context.matchPath(pathname, GRAPH_MESSAGE_VALUE_ROUTE_PATTERN);
       if (method === 'GET' && messageValueMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.value');
         context.sendBytes(
@@ -215,7 +233,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const attachmentsListMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments$/);
+      const attachmentsListMatch = context.matchPath(pathname, GRAPH_ATTACHMENTS_LIST_ROUTE_PATTERN);
       if (method === 'GET' && attachmentsListMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachments.list');
         context.sendJson(
@@ -230,7 +248,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const attachmentValueMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/([^/]+)\/\$value$/);
+      const attachmentValueMatch = context.matchPath(pathname, GRAPH_ATTACHMENT_VALUE_ROUTE_PATTERN);
       if (method === 'GET' && attachmentValueMatch?.[1] && attachmentValueMatch?.[2]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachment.get');
         context.sendBytes(
@@ -240,7 +258,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const attachmentMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/);
+      const attachmentMatch = context.matchPath(pathname, GRAPH_ATTACHMENT_ROUTE_PATTERN);
       if (method === 'GET' && attachmentMatch?.[1] && attachmentMatch?.[2]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachment.get');
         context.sendJson(
@@ -255,7 +273,7 @@ export const graphProvider: EmailConnectProvider = {
 
       const uploadSessionMatch = context.matchPath(
         pathname,
-        /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/createUploadSession$/,
+        GRAPH_UPLOAD_SESSION_ROUTE_PATTERN,
       );
       if (method === 'POST' && uploadSessionMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachment.upload.create');
@@ -273,7 +291,7 @@ export const graphProvider: EmailConnectProvider = {
 
       // Compose and mailbox-mutation routes come after reads and downloads so
       // the route binder mirrors the usual client lifecycle.
-      const createReplyMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/createReply$/);
+      const createReplyMatch = context.matchPath(pathname, GRAPH_CREATE_REPLY_ROUTE_PATTERN);
       if (method === 'POST' && createReplyMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.reply.create');
         context.sendJson(200, await service.createReplyDraft(mailbox.id, decodeURIComponent(createReplyMatch[1])));
@@ -299,7 +317,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const sendMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/send$/);
+      const sendMatch = context.matchPath(pathname, GRAPH_SEND_DRAFT_ROUTE_PATTERN);
       if (method === 'POST' && sendMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.draft.send');
         await service.sendDraft(mailbox.id, decodeURIComponent(sendMatch[1]));
@@ -307,7 +325,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const moveMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/move$/);
+      const moveMatch = context.matchPath(pathname, GRAPH_MOVE_MESSAGE_ROUTE_PATTERN);
       if (method === 'POST' && moveMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.move');
         const body = await context.readJsonBody();
@@ -324,7 +342,7 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
-      const copyMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/copy$/);
+      const copyMatch = context.matchPath(pathname, GRAPH_COPY_MESSAGE_ROUTE_PATTERN);
       if (method === 'POST' && copyMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.copy');
         const body = await context.readJsonBody();

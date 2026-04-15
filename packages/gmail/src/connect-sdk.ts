@@ -22,6 +22,8 @@ export function registerGmailOAuthClient(
   });
 }
 
+// Start a Gmail-shaped white-box authorization flow, including Google-specific
+// knobs such as access_type and incremental consent.
 export function beginGmailAuthorization(params: {
   engine: EmailConnectEngine;
   baseUrl: string;
@@ -44,6 +46,7 @@ export function beginGmailAuthorization(params: {
   });
 }
 
+// Approve a pending Gmail consent request without rendering the browser page.
 export function approveGmailAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -53,6 +56,7 @@ export function approveGmailAuthorization(params: {
   return approveOAuthAuthorization(params);
 }
 
+// Deny a pending Gmail consent request with Google-style callback errors.
 export function denyGmailAuthorization(params: {
   engine: EmailConnectEngine;
   requestId: string;
@@ -62,6 +66,7 @@ export function denyGmailAuthorization(params: {
   return denyOAuthAuthorization(params);
 }
 
+// Exchange a Gmail auth code through the shared core OAuth state machine.
 export function exchangeGmailAuthorizationCode(params: {
   engine: EmailConnectEngine;
   clientId: string;
@@ -76,6 +81,8 @@ export function exchangeGmailAuthorizationCode(params: {
   });
 }
 
+// Refresh a Gmail mailbox grant while preserving Google's refresh-token reuse
+// semantics unless backend config says otherwise.
 export function refreshGmailAuthorization(params: {
   engine: EmailConnectEngine;
   clientId: string;
@@ -89,6 +96,7 @@ export function refreshGmailAuthorization(params: {
   });
 }
 
+// Revoke a Gmail access or refresh token from white-box tests.
 export function revokeGmailAuthorization(params: {
   engine: EmailConnectEngine;
   token: string;

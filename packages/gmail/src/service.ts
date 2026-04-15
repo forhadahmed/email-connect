@@ -89,18 +89,28 @@ type GmailWatchState = {
   historyId: string;
 };
 
+// Gmail query and label regexes are provider-contract details, not incidental
+// string manipulation. Naming them keeps supported search grammar explicit.
+const GMAIL_AFTER_QUERY_PATTERN = /\bafter:(\d+)\b/;
+const REPLY_PREFIX_PATTERN = /^\s*re:/i;
+const MOCK_GMAIL_LABEL_ID_PATTERN = /^Label_(.+)$/;
+
 // Provider runtime that does not belong in core. Core owns canonical mailbox
 // entities; Gmail owns watch state and other Gmail-specific ephemera.
 const gmailRuntimeByEngine = new WeakMap<EmailConnectEngine, Map<string, { watch: GmailWatchState | null }>>();
 
+// Gmail page tokens in this mock are simple offsets. Keeping that decode logic
+// narrow makes pagination deterministic and easy to assert in black-box tests.
 function parsePageToken(pageToken?: string): number {
   if (!pageToken) return 0;
   const parsed = Number.parseInt(String(pageToken), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+// Support the Gmail `after:` search operator because it is the most important
+// query primitive for historical scans and incremental catch-up tests.
 function receivedAfterFromQuery(q?: string): string | undefined {
-  const match = String(q || '').match(/\bafter:(\d+)\b/);
+  const match = String(q || '').match(GMAIL_AFTER_QUERY_PATTERN);
   if (!match) return undefined;
   const value = match[1];
   if (!value) return undefined;
@@ -109,6 +119,8 @@ function receivedAfterFromQuery(q?: string): string | undefined {
   return new Date(seconds * 1000).toISOString();
 }
 
+// Runtime state is allocated lazily per engine/mailbox so multiple embedded
+// harnesses can run in one process without sharing Gmail watch state.
 function gmailRuntime(engine: EmailConnectEngine, mailboxId: string) {
   let perEngine = gmailRuntimeByEngine.get(engine);
   if (!perEngine) {
@@ -132,12 +144,18 @@ function normalizeMessageFormat(value: string | null | undefined): GmailMessageF
   return 'full';
 }
 
+// Metadata headers are matched case-insensitively, mirroring how real mail
+// headers are consumed even though the response preserves original casing.
 function normalizeMetadataHeaderFilter(values: string[] | null | undefined): Set<string> | null {
   const filtered = (values || []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
   return filtered.length ? new Set(filtered) : null;
 }
 
+// Extract the subset of Gmail query terms this harness treats as first-class
+// product behavior: labels, addresses, and subject filters.
 function parseGmailQueryValues(prefix: 'label' | 'from' | 'to' | 'subject', q?: string): string[] {
+  // The prefix is constrained by the type above, so dynamic RegExp construction
+  // is safe here and avoids four duplicated query-term patterns.
   const pattern = new RegExp(`\\b${prefix}:(?:"([^"]+)"|([^\\s()]+))`, 'gi');
   const values: string[] = [];
   let match: RegExpExecArray | null = null;
@@ -148,6 +166,8 @@ function parseGmailQueryValues(prefix: 'label' | 'from' | 'to' | 'subject', q?: 
   return values;
 }
 
+// Address matching intentionally accepts either full addresses or domain/local
+// fragments so generated inboxes can be queried ergonomically.
 function addressMatches(raw: string | null, value: string): boolean {
   if (!raw) return false;
   const lower = raw.toLowerCase();
@@ -155,26 +175,36 @@ function addressMatches(raw: string | null, value: string): boolean {
   return lower.includes(`@${value}`) || lower.includes(value);
 }
 
+// Reply helpers preserve existing `Re:` subjects so tests can assert thread
+// behavior without accumulating artificial prefixes.
 function normalizeReplySubject(subject: string | null | undefined): string {
   const clean = String(subject || '').trim();
   if (!clean) return 'Re:';
-  if (/^\s*re:/i.test(clean)) return clean;
+  if (REPLY_PREFIX_PATTERN.test(clean)) return clean;
   return `Re: ${clean}`;
 }
 
+// Gmail rarely exposes empty subjects as truly absent in UI-driven flows; use a
+// stable placeholder so generated examples stay readable.
 function normalizeSubject(subject: string | null | undefined): string {
   const clean = String(subject || '').trim();
   return clean || '(no subject)';
 }
 
+// Custom label ids need to be stable and reversible enough for tests, but they
+// should not collide with Gmail's system label names.
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+// Public helper used by tests/examples that need to compare Gmail-shaped custom
+// label ids without duplicating the encoding scheme.
 export function mockGmailLabelId(labelName: string): string {
   return `Label_${Buffer.from(labelName, 'utf8').toString('base64url')}`;
 }
 
+// Build the provider-visible header set from canonical message fields plus any
+// raw headers that were seeded or imported.
 function messageHeaders(message: MailboxMessage): GmailMessagePayloadHeader[] {
   const headers: GmailMessagePayloadHeader[] = [];
   if (message.subject) headers.push({ name: 'Subject', value: message.subject });
@@ -193,18 +223,21 @@ function messageHeaders(message: MailboxMessage): GmailMessagePayloadHeader[] {
   return headers;
 }
 
+// Apply `metadataHeaders[]` at the payload boundary so callers get consistent
+// filtering across `messages.get` and `threads.get`.
 function filterPayloadHeaders(headers: GmailMessagePayloadHeader[], metadataHeaders?: string[]): GmailMessagePayloadHeader[] {
   const wanted = normalizeMetadataHeaderFilter(metadataHeaders);
   if (!wanted) return headers;
   return headers.filter((header) => wanted.has(String(header.name || '').toLowerCase()));
 }
 
+// Build the structured Gmail payload tree from canonical message bodies and
+// attachments. This is separate from raw MIME rendering because Gmail exposes
+// both representations with different contracts.
 function buildPayload(
   message: MailboxMessage,
   options?: { includeBodies?: boolean; metadataHeaders?: string[] },
 ): GmailMessagePayload {
-  // Payload building separates metadata-only responses from body-bearing
-  // responses so `format=minimal|metadata|full|raw` behaves distinctly.
   const parts: GmailMessagePayload[] = [];
   const includeBodies = options?.includeBodies !== false;
   if (includeBodies && message.bodyText) {
@@ -236,6 +269,8 @@ function buildPayload(
   };
 }
 
+// Render the raw RFC822 form used by `format=raw` from canonical state instead
+// of storing a second serialized representation.
 function messageRawMime(message: MailboxMessage): string {
   return renderRawEmail({
     from: message.from,
@@ -256,6 +291,8 @@ function messageRawMime(message: MailboxMessage): string {
   });
 }
 
+// Gmail `internalDate` is a millisecond timestamp encoded as a string; invalid
+// fixture dates are omitted instead of inventing misleading provider state.
 function messageInternalDate(message: MailboxMessage): string | undefined {
   if (!message.receivedAt) return undefined;
   const parsed = Date.parse(message.receivedAt);
@@ -272,6 +309,8 @@ function latestHistoryIdForMessage(mailbox: MailboxRecord, providerMessageId: st
   return latest ? String(latest) : undefined;
 }
 
+// Project one canonical message into Gmail's `Message` resource, including the
+// format-specific body/raw/metadata differences consumers rely on.
 function buildMessage(
   mailbox: MailboxRecord,
   message: MailboxMessage,
@@ -309,6 +348,8 @@ function buildMessage(
   };
 }
 
+// Order messages inside a thread oldest-first, which is how most Gmail clients
+// expect conversation materialization to behave.
 function threadMessages(messages: MailboxMessage[], mailbox: MailboxRecord, engine: EmailConnectEngine, options?: {
   format?: GmailMessageFormat;
   metadataHeaders?: string[];
@@ -353,6 +394,8 @@ function buildThread(mailbox: MailboxRecord, threadId: string, messages: Mailbox
   };
 }
 
+// Evaluate the supported Gmail query subset against canonical message state.
+// Unsupported terms are ignored by design rather than approximated loosely.
 function matchesQuery(message: MailboxMessage, q?: string): boolean {
   const after = receivedAfterFromQuery(q);
   if (after && message.receivedAt && message.receivedAt < after) return false;
@@ -378,6 +421,8 @@ function matchesQuery(message: MailboxMessage, q?: string): boolean {
   return true;
 }
 
+// `labelIds[]` are provider ids, so compare against Gmail-shaped label ids
+// rather than raw canonical label names.
 function matchesLabelFilter(message: MailboxMessage, labelIds?: string[]): boolean {
   if (!labelIds?.length) return true;
   const labels = new Set(message.labels.map((label) => mockGmailLabelId(label)));
@@ -420,6 +465,8 @@ function historyRecordForChange(change: MailboxChange, message: MailboxMessage |
   ];
 }
 
+// Apply Gmail's `historyTypes[]` filtering after history records are built so
+// replay/delete/label semantics stay centralized in `historyRecordForChange`.
 function filterHistoryRecordByTypes(record: GmailHistoryRecord, historyTypes?: string[]): GmailHistoryRecord | null {
   const filters = new Set((historyTypes || []).map((entry) => entry.toLowerCase()));
   if (!filters.size) return record;
@@ -461,8 +508,12 @@ function filterHistoryRecordByTypes(record: GmailHistoryRecord, historyTypes?: s
  * identical across product surfaces.
  */
 export class GmailService {
+  // The service receives the shared engine so SDK and HTTP callers see identical
+  // mailbox state, history cursors, and fault injection.
   constructor(private readonly engine: EmailConnectEngine) {}
 
+  // Profile exposes the mailbox identity plus the current history watermark,
+  // which many Gmail sync clients use as their initial incremental cursor.
   async getProfile(mailboxId: string): Promise<GmailApiResponse<GmailProfile>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -479,6 +530,8 @@ export class GmailService {
     };
   }
 
+  // Label listing combines Gmail's system inbox label with labels discovered on
+  // messages, while backend config can hide labels to test catalog drift.
   async listLabels(mailboxId: string): Promise<GmailApiResponse<{ labels?: GmailLabel[] }>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -498,14 +551,14 @@ export class GmailService {
     };
   }
 
+  // `messages.list` intentionally returns lightweight references. Consumers
+  // that need bodies or headers should follow up with `messages.get`.
   async listMessages(mailboxId: string, params: {
     q?: string;
     labelIds?: string[];
     maxResults?: number;
     pageToken?: string;
   }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
-    // `messages.list` intentionally returns lightweight references. Consumers
-    // that need bodies or headers should follow up with `messages.get`.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.list');
@@ -534,14 +587,14 @@ export class GmailService {
     };
   }
 
+  // Threads are grouped from canonical messages at read time so replay, deletes,
+  // and imported historical mail all feed the same thread view.
   async listThreads(mailboxId: string, params: {
     q?: string;
     labelIds?: string[];
     maxResults?: number;
     pageToken?: string;
   }): Promise<GmailApiResponse<{ threads?: GmailThreadRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
-    // Threads are grouped from canonical messages at read time so replay,
-    // deletes, and imported historical mail all feed the same thread view.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.list');
@@ -577,13 +630,13 @@ export class GmailService {
     };
   }
 
+  // `getMessage` is where the chosen Gmail format is finally projected from
+  // canonical mailbox state into the provider-specific payload shape.
   async getMessage(
     mailboxId: string,
     providerMessageId: string,
     options?: { format?: string; metadataHeaders?: string[] },
   ): Promise<GmailApiResponse<GmailMessage>> {
-    // `getMessage` is where the chosen Gmail format is finally projected from
-    // canonical mailbox state into the provider-specific payload shape.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.get');
@@ -599,13 +652,13 @@ export class GmailService {
     };
   }
 
+  // Thread reads intentionally reuse the same message projection rules as
+  // message reads so `format` and `metadataHeaders` behave consistently.
   async getThread(
     mailboxId: string,
     providerThreadId: string,
     options?: { format?: string; metadataHeaders?: string[] },
   ): Promise<GmailApiResponse<GmailThread>> {
-    // Thread reads intentionally reuse the same message projection rules as
-    // message reads so `format` and `metadataHeaders` behave consistently.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.get');
@@ -621,6 +674,8 @@ export class GmailService {
     };
   }
 
+  // Attachment reads return Gmail's base64url wrapper, not raw bytes. That keeps
+  // black-box callers on the provider contract instead of the core binary form.
   async getAttachment(mailboxId: string, providerMessageId: string, attachmentId: string): Promise<GmailApiResponse<{ data?: string }>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -640,14 +695,14 @@ export class GmailService {
     };
   }
 
+  // Gmail history is derived from canonical change rows and then expanded into
+  // Gmail-style event arrays. That keeps replay and stale-cursor tests rooted
+  // in one source of truth.
   async listHistory(mailboxId: string, params: {
     startHistoryId: string;
     pageToken?: string;
     historyTypes?: string[];
   }): Promise<GmailApiResponse<{ historyId?: string; nextPageToken?: string; history?: GmailHistoryRecord[] }>> {
-    // Gmail history is derived from canonical change rows and then expanded into
-    // Gmail-style event arrays. That keeps replay and stale-cursor tests rooted
-    // in one source of truth.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.history.list');
@@ -685,14 +740,14 @@ export class GmailService {
     };
   }
 
+  // Draft creation consumes raw RFC822 input because that is the seam many
+  // Gmail clients already use for compose and reply flows.
   async createDraft(mailboxId: string, requestBody: Record<string, unknown>): Promise<
     GmailApiResponse<{
       id?: string;
       message?: { id?: string; threadId?: string };
     }>
   > {
-    // Draft creation consumes raw RFC822 input because that is the seam many
-    // Gmail clients already use for compose and reply flows.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.drafts.create');
@@ -719,6 +774,8 @@ export class GmailService {
     };
   }
 
+  // Draft send records an outbound event without inventing a received message
+  // in the mailbox, matching Gmail's compose-focused API surface.
   async sendDraft(mailboxId: string, requestBody: Record<string, unknown>): Promise<GmailApiResponse<{ id?: string; threadId?: string }>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -737,12 +794,12 @@ export class GmailService {
     };
   }
 
+  // `messages.send` is modeled as a transient draft+send internally so the
+  // outbox and threading behavior line up with draft-send flows.
   async sendMessage(mailboxId: string, requestBody: Record<string, unknown>): Promise<GmailApiResponse<{ id?: string; threadId?: string }>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.send');
-    // `messages.send` is modeled as a transient draft+send internally so the
-    // outbox and threading behavior line up with draft-send flows.
     const raw = String(requestBody.raw || '');
     const parsed = parseRawEmailBase64Url(raw);
     const providerThreadId = String(requestBody.threadId || '').trim() || this.engine.generateId('gmail-thread');
@@ -773,13 +830,13 @@ export class GmailService {
     };
   }
 
+  // `import` and `insert` share the same raw-message ingestion path; the caller
+  // chooses the mode so auth and tests can distinguish the provider operation.
   async importMessage(
     mailboxId: string,
     requestBody: Record<string, unknown>,
     mode: 'import' | 'insert',
   ): Promise<GmailApiResponse<GmailMessage>> {
-    // `import` and `insert` share the same raw-message ingestion path; the
-    // caller chooses the operation name so auth and tests can distinguish them.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, mode === 'import' ? 'gmail.messages.import' : 'gmail.messages.insert');
@@ -817,7 +874,7 @@ export class GmailService {
               .map((labelId) => String(labelId || '').trim())
               .filter(Boolean)
               .map((labelId) => {
-                const match = labelId.match(/^Label_(.+)$/);
+                const match = labelId.match(MOCK_GMAIL_LABEL_ID_PATTERN);
                 return match?.[1] ? Buffer.from(match[1], 'base64url').toString('utf8') : labelId;
               }),
           }
@@ -834,12 +891,12 @@ export class GmailService {
     };
   }
 
+  // Watch state is intentionally lightweight. The mock preserves Gmail's
+  // bootstrap contract and expiration shape more than it emulates Pub/Sub.
   async watchMailbox(
     mailboxId: string,
     requestBody: Record<string, unknown>,
   ): Promise<GmailApiResponse<GmailWatchResponse>> {
-    // Watch state is intentionally lightweight. The mock needs to preserve the
-    // bootstrap contract and expiration shape more than emulate Pub/Sub.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.watch.create');
@@ -863,6 +920,8 @@ export class GmailService {
     };
   }
 
+  // Stop watch clears only Gmail runtime state; it does not mutate messages or
+  // cursors because consumers should be able to restart watches deterministically.
   async stopWatching(mailboxId: string): Promise<GmailApiResponse<Record<string, never>>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -871,6 +930,8 @@ export class GmailService {
     return { data: {} };
   }
 
+  // Plain-draft helper is a white-box convenience built on the same canonical
+  // draft store as the raw Gmail draft endpoint.
   async createPlainDraft(mailboxId: string, params: {
     to: string;
     subject?: string | null;
@@ -906,6 +967,8 @@ export class GmailService {
     };
   }
 
+  // Reply-draft helper keeps the common consumer flow concise while preserving
+  // Gmail's thread and subject behavior.
   async createReplyDraft(mailboxId: string, params: {
     to: string;
     subject?: string | null;

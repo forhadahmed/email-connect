@@ -22,12 +22,16 @@ import { bytesFromUnknown } from '../utils/base64.js';
 import { normalizeAddressInput } from '../utils/raw-email.js';
 import { DeterministicClock } from './clock.js';
 
+// Most fixture fields are optional, so normalize strings once at the engine
+// boundary before provider packages start projecting resources.
 function cleanString(value: string | null | undefined): string | null {
   if (value == null) return null;
   const normalized = String(value).trim();
   return normalized || null;
 }
 
+// Header maps are normalized while preserving caller-provided names. Provider
+// projections can later decide whether to filter or render them.
 function normalizeHeaders(value: Record<string, string> | null | undefined): Record<string, string> | null {
   if (!value) return null;
   const entries = Object.entries(value)
@@ -36,6 +40,8 @@ function normalizeHeaders(value: Record<string, string> | null | undefined): Rec
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
+// Stable dedupe preserves fixture order. That matters for label lists and scope
+// payloads where tests often assert exact arrays.
 function uniqueStrings(values: string[] | undefined): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -48,6 +54,8 @@ function uniqueStrings(values: string[] | undefined): string[] {
   return out;
 }
 
+// Message timestamps accept Date/string inputs but fall back to the deterministic
+// clock so generated and hand-authored fixtures behave the same way.
 function normalizeReceivedAt(value: string | Date | null | undefined, fallbackIso: string): string {
   if (value == null) return fallbackIso;
   const parsed = value instanceof Date ? value : new Date(value);
@@ -55,9 +63,9 @@ function normalizeReceivedAt(value: string | Date | null | undefined, fallbackIs
   return parsed.toISOString();
 }
 
+// Backend config is normalized once at the engine seam so provider services can
+// treat missing knobs as already-defaulted state.
 function normalizeBackendConfig(input: Partial<MailboxBackendConfig> | undefined): MailboxBackendConfig {
-  // Backend config is normalized once at the engine seam so provider services
-  // can treat missing knobs as already-defaulted state.
   return {
     ...(input?.latencyMs != null ? { latencyMs: input.latencyMs } : {}),
     ...(input?.historyResetBeforeRowId != null ? { historyResetBeforeRowId: input.historyResetBeforeRowId } : {}),
@@ -103,6 +111,8 @@ function normalizeBackendConfig(input: Partial<MailboxBackendConfig> | undefined
   };
 }
 
+// Clone binary attachments defensively so snapshots cannot mutate the canonical
+// in-memory artifact store.
 function cloneAttachment(attachment: MailboxAttachment): MailboxAttachment {
   return {
     providerAttachmentId: attachment.providerAttachmentId,
@@ -119,6 +129,8 @@ function cloneAttachment(attachment: MailboxAttachment): MailboxAttachment {
   };
 }
 
+// Message clones preserve record shape while isolating mutable arrays and
+// binary attachment buffers from callers.
 function cloneMessage(message: MailboxMessage): MailboxMessage {
   return {
     ...message,
@@ -128,6 +140,8 @@ function cloneMessage(message: MailboxMessage): MailboxMessage {
   };
 }
 
+// Draft clones follow the same rule as messages: consumers get snapshots, not
+// direct handles into provider state.
 function cloneDraft(draft: MailboxDraft): MailboxDraft {
   return {
     ...draft,
@@ -155,6 +169,8 @@ function operationMatches(configuredOperations: string[] | undefined, operation:
   });
 }
 
+// Change-row snapshots keep label arrays isolated so history/delta assertions
+// cannot accidentally rewrite future cursor behavior.
 function cloneChange(change: MailboxChange): MailboxChange {
   return {
     ...change,
@@ -163,6 +179,8 @@ function cloneChange(change: MailboxChange): MailboxChange {
   };
 }
 
+// Auth clones expose current grant state to control-plane callers without
+// letting callers mutate granted scopes directly.
 function cloneAuth(auth: MailboxAuthRecord): MailboxAuthRecord {
   return {
     ...auth,
@@ -170,6 +188,8 @@ function cloneAuth(auth: MailboxAuthRecord): MailboxAuthRecord {
   };
 }
 
+// Generic date normalization is used for auth and embedded-message state, where
+// invalid fixture dates should be omitted rather than silently rewritten.
 function normalizeDate(value: string | Date | null | undefined): string | null {
   if (value == null) return null;
   const parsed = value instanceof Date ? value : new Date(value);
@@ -177,6 +197,8 @@ function normalizeDate(value: string | Date | null | undefined): string | null {
   return parsed.toISOString();
 }
 
+// Initial mailbox auth supports both pre-consented mailboxes and direct bearer
+// token fixtures, then the connect plane canonicalizes the grant.
 function initialMailboxAuth(input: CreateMailboxInput, accessToken: string): MailboxAuthRecord {
   const refreshToken =
     input.auth && 'refreshToken' in input.auth ? cleanString(input.auth.refreshToken) : `refresh-${accessToken}`;
@@ -199,7 +221,16 @@ export type EmailConnectEngineOptions = {
   providers?: EmailConnectProvider[];
 };
 
+/**
+ * Canonical in-memory state engine shared by the SDK and HTTP server.
+ *
+ * Provider packages should not own durable mailbox state. They project this
+ * provider-neutral model into Gmail or Graph shapes and feed mutations back
+ * through these methods.
+ */
 export class EmailConnectEngine {
+  // The clock is part of canonical state because token expiry, watch expiry,
+  // generated mail timelines, and cursor behavior all depend on it.
   private readonly clock: DeterministicClock;
   // The harness intentionally keeps all mutable mailbox state in memory first.
   // Server and SDK surfaces both delegate into this engine, so tests can swap
@@ -209,6 +240,8 @@ export class EmailConnectEngine {
   private readonly accessTokenToMailboxId = new Map<string, string>();
   private readonly providers = new Map<string, EmailConnectProvider>();
   private readonly outbox: OutboxMessage[] = [];
+  // Sequence counters intentionally stay separate so message rows, changes,
+  // outbox entries, and synthetic ids can evolve independently.
   private nextMailboxSeq = 1;
   private nextMessageRowId = 1;
   private nextChangeRowId = 1;
@@ -216,6 +249,8 @@ export class EmailConnectEngine {
   private nextSyntheticSeq = 1;
   readonly connect: EmailConnectConnectPlane;
 
+  // Installing providers at construction keeps package composition explicit:
+  // core can run alone, Gmail-only, Graph-only, or with both providers.
   constructor(options?: EmailConnectEngineOptions) {
     this.clock = new DeterministicClock(options?.baseTime);
     for (const provider of options?.providers || []) {
@@ -224,10 +259,14 @@ export class EmailConnectEngine {
     this.connect = new EmailConnectConnectPlane(this);
   }
 
+  // Expose engine time as a first-class API so scenarios and token/cursor
+  // behavior can be advanced deterministically.
   nowIso(): string {
     return this.clock.nowIso();
   }
 
+  // Advance deterministic time without sleeping; useful for token expiry,
+  // consent expiry, watch expiry, and generated mailbox timelines.
   advanceTimeMs(ms: number): string {
     return this.clock.advanceMs(ms);
   }
@@ -242,6 +281,8 @@ export class EmailConnectEngine {
     return `${prefix}-${this.nextSyntheticSeq++}`;
   }
 
+  // Provider installation is intentionally idempotence-hostile: duplicate
+  // providers usually mean a package composition bug.
   installProvider(provider: EmailConnectProvider): void {
     const id = String(provider.id || '').trim();
     if (!id) throw new ConflictError('Provider id is required');
@@ -251,10 +292,13 @@ export class EmailConnectEngine {
     this.providers.set(id, provider);
   }
 
+  // Return installed provider definitions for the HTTP host route loop.
   listProviders(): EmailConnectProvider[] {
     return Array.from(this.providers.values());
   }
 
+  // Provider packages and control APIs use this to fail fast when a consumer
+  // tries to exercise a provider that was not installed.
   requireProvider(providerId: string): EmailConnectProvider {
     const provider = this.providers.get(String(providerId || '').trim());
     if (!provider) {
@@ -334,6 +378,8 @@ export class EmailConnectEngine {
     };
   }
 
+  // Scenario loading is a thin convenience layer over mailbox creation so the
+  // same validation applies to JSON scenarios and direct SDK setup.
   loadScenario(definition: ScenarioDefinition): CreateMailboxResult[] {
     if (definition.baseTime) {
       this.clock.setTime(definition.baseTime);
@@ -341,10 +387,14 @@ export class EmailConnectEngine {
     return definition.mailboxes.map((mailbox) => this.createMailbox(mailbox));
   }
 
+  // List mailbox snapshots rather than records so callers can inspect state
+  // without mutating the live engine.
   listMailboxes(): MailboxSnapshot[] {
     return Array.from(this.mailboxes.values()).map((mailbox) => this.snapshotMailbox(mailbox.id));
   }
 
+  // Snapshots are the public inspection format for both SDK and control-plane
+  // users; provider services should use `requireMailbox` when they need records.
   snapshotMailbox(identifier: string): MailboxSnapshot {
     const mailbox = this.requireMailbox(identifier);
     return {
@@ -380,6 +430,8 @@ export class EmailConnectEngine {
     return mailbox;
   }
 
+  // Accept either mailbox id or alias. This keeps examples readable while still
+  // allowing deterministic ids for black-box tests.
   requireMailbox(identifier: string): MailboxRecord {
     const direct = this.mailboxes.get(identifier);
     if (direct) return direct;
@@ -391,6 +443,8 @@ export class EmailConnectEngine {
     throw new NotFoundError(`Mailbox not found: ${identifier}`);
   }
 
+  // Backend configuration is mutable by design: fault injection and provider
+  // drift scenarios often need to change while a test is already running.
   configureBackend(identifier: string, patch: Partial<MailboxBackendConfig>): MailboxSnapshot {
     const mailbox = this.requireMailbox(identifier);
     mailbox.backend = normalizeBackendConfig({
@@ -450,6 +504,8 @@ export class EmailConnectEngine {
     return cloneMessage(message);
   }
 
+  // Message updates are primarily for scenario evolution. Label changes also
+  // emit change rows because providers expose those through sync feeds.
   updateMessage(
     identifier: string,
     providerMessageId: string,
@@ -492,6 +548,8 @@ export class EmailConnectEngine {
     return cloneMessage(message);
   }
 
+  // Deletion is soft so full-state inspection and provider change feeds can
+  // still describe that the item once existed.
   deleteMessage(identifier: string, providerMessageId: string): void {
     const mailbox = this.requireMailbox(identifier);
     const message = this.findMessage(mailbox, providerMessageId);
@@ -503,6 +561,8 @@ export class EmailConnectEngine {
     });
   }
 
+  // Add an attachment to an existing message through the canonical artifact
+  // path; provider-specific resource shapes are added at provider boundaries.
   addAttachment(identifier: string, providerMessageId: string, seed: AttachmentSeed): MailboxAttachment {
     const mailbox = this.requireMailbox(identifier);
     const message = this.findMessage(mailbox, providerMessageId);
@@ -525,6 +585,8 @@ export class EmailConnectEngine {
     return cloneAttachment(attachment);
   }
 
+  // Draft creation is provider-neutral. Gmail and Graph are responsible for
+  // turning their respective compose request shapes into this seed.
   createDraft(identifier: string, seed: DraftSeed): MailboxDraft {
     const mailbox = this.requireMailbox(identifier);
     const providerDraftId = cleanString(seed.providerDraftId) || this.generateId(`${mailbox.provider}-draft`);
@@ -546,6 +608,8 @@ export class EmailConnectEngine {
     return cloneDraft(draft);
   }
 
+  // Draft updates intentionally affect only compose fields. Attachment changes
+  // go through dedicated attachment APIs so upload-session behavior is testable.
   updateDraft(
     identifier: string,
     providerDraftId: string,
@@ -568,12 +632,15 @@ export class EmailConnectEngine {
     return cloneDraft(draft);
   }
 
+  // Draft reads return a clone so provider services can safely project draft
+  // state without exposing mutable references to callers.
   getDraft(identifier: string, providerDraftId: string): MailboxDraft | null {
     const mailbox = this.requireMailbox(identifier);
     const draft = mailbox.drafts.find((entry) => entry.providerDraftId === providerDraftId);
     return draft ? cloneDraft(draft) : null;
   }
 
+  // Draft deletion is shared by send and explicit DELETE paths.
   deleteDraft(identifier: string, providerDraftId: string): boolean {
     const mailbox = this.requireMailbox(identifier);
     const index = mailbox.drafts.findIndex((entry) => entry.providerDraftId === providerDraftId);
@@ -628,24 +695,34 @@ export class EmailConnectEngine {
     });
   }
 
+  // Outbox is the canonical observable outbound side effect. Provider packages
+  // may also materialize sent-item messages when their API semantics require it.
   listOutbox(mailboxId?: string): OutboxMessage[] {
     return this.outbox
       .filter((entry) => !mailboxId || entry.mailboxId === this.requireMailbox(mailboxId).id)
       .map((entry) => ({ ...entry }));
   }
 
+  // Visible messages are what provider list/get endpoints should expose by
+  // default; deleted messages remain available through change rows only.
   listVisibleMessages(mailbox: MailboxRecord): MailboxMessage[] {
     return mailbox.messages.filter((message) => !message.deleted).map(cloneMessage);
   }
 
+  // All messages are used by sync feeds and inspection paths that must reason
+  // about historical deleted items.
   listAllMessages(mailbox: MailboxRecord): MailboxMessage[] {
     return mailbox.messages.map(cloneMessage);
   }
 
+  // Change rows are the provider-neutral substrate for Gmail history and Graph
+  // delta.
   listChanges(mailbox: MailboxRecord): MailboxChange[] {
     return mailbox.changes.map(cloneChange);
   }
 
+  // Token replacement updates both the mailbox record and the reverse lookup
+  // map that provider HTTP facades use for bearer auth.
   replaceMailboxAccessToken(mailbox: MailboxRecord, accessToken: string): void {
     if (mailbox.accessToken) {
       this.accessTokenToMailboxId.delete(mailbox.accessToken);
@@ -658,16 +735,18 @@ export class EmailConnectEngine {
     this.accessTokenToMailboxId.set(accessToken, mailbox.id);
   }
 
+  // Clearing a token removes the bearer lookup while preserving auth snapshot
+  // metadata such as revokedAt for inspection.
   clearMailboxAccessToken(mailbox: MailboxRecord): void {
     if (mailbox.accessToken) {
       this.accessTokenToMailboxId.delete(mailbox.accessToken);
     }
   }
 
+  // Failure injection is consumed by provider services right before the
+  // simulated provider call would have happened, which keeps retries and
+  // sequencing realistic from the consumer's point of view.
   maybeThrowInjectedFailure(mailbox: MailboxRecord, operation: string): void {
-    // Failure injection is consumed by provider services right before the
-    // simulated provider call would have happened, which keeps retries and
-    // sequencing realistic from the consumer's point of view.
     const authOps = mailbox.backend.authFailureOperations || [];
     if (
       mailbox.backend.authFailureMode &&
@@ -707,14 +786,16 @@ export class EmailConnectEngine {
     }
   }
 
+  // Latency injection uses real sleep because black-box clients need to exercise
+  // timeout and concurrency behavior against actual wall-clock delay.
   async maybeDelay(mailbox: MailboxRecord): Promise<void> {
     if (!mailbox.backend.latencyMs || mailbox.backend.latencyMs <= 0) return;
     await new Promise((resolve) => setTimeout(resolve, mailbox.backend.latencyMs));
   }
 
+  // Materialization is where loose fixture input becomes a fully normalized
+  // attachment record that every provider surface can trust.
   private materializeAttachment(seed: AttachmentSeed): MailboxAttachment {
-    // Materialization is where loose fixture input becomes a fully normalized
-    // attachment record that every provider surface can trust.
     const bytes = bytesFromUnknown(seed.contentBytes);
     return {
       providerAttachmentId: cleanString(seed.providerAttachmentId) || this.generateId('att'),
@@ -741,6 +822,8 @@ export class EmailConnectEngine {
     };
   }
 
+  // Message lookup is a private invariant boundary: if a provider asks for a
+  // missing item, the engine raises the same NotFound shape consistently.
   private findMessage(mailbox: MailboxRecord, providerMessageId: string): MailboxMessage {
     const message = mailbox.messages.find((entry) => entry.providerMessageId === providerMessageId);
     if (!message) {
@@ -749,6 +832,8 @@ export class EmailConnectEngine {
     return message;
   }
 
+  // Change rows are append-only so provider cursors can be derived later
+  // without mutating historical sequencing.
   private recordChange(
     mailbox: MailboxRecord,
     change: {
@@ -758,8 +843,6 @@ export class EmailConnectEngine {
       removedLabels?: string[];
     },
   ): void {
-    // Change rows are append-only so provider cursors can be derived later
-    // without mutating historical sequencing.
     mailbox.changes.push({
       rowId: this.nextChangeRowId++,
       kind: change.kind,

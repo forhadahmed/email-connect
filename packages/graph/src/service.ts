@@ -8,29 +8,51 @@ import {
 } from '@email-connect/core';
 import type { AttachmentSeed, MailboxAttachment, MailboxChange, MailboxDraft, MailboxMessage, MailboxRecord } from '@email-connect/core';
 
+// Graph parser regexes are intentionally named because they encode supported
+// mock-provider contract, not just implementation detail.
+const GRAPH_RECEIVED_AFTER_FILTER_PATTERN = /receivedDateTime ge ([^ )]+)/;
+const GRAPH_FILTER_QUOTE_EDGE_PATTERN = /^'|'$/g;
+const GRAPH_PREFER_BODY_CONTENT_TYPE_PATTERN = /outlook\.body-content-type\s*=\s*"?(text|html)"?/i;
+const GRAPH_STYLE_BLOCK_PATTERN = /<style[\s\S]*?<\/style>/gi;
+const GRAPH_SCRIPT_BLOCK_PATTERN = /<script[\s\S]*?<\/script>/gi;
+const HTML_TAG_PATTERN = /<[^>]+>/g;
+const WHITESPACE_RUN_PATTERN = /\s+/g;
+const GRAPH_UPLOAD_SESSION_PATH_PATTERN = /\/__email-connect\/upload\/graph\/([^/?]+)/;
+const GRAPH_CONTENT_RANGE_PATTERN = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i;
+
+// Parse provider continuation URLs against a Graph-like origin so SDK calls and
+// black-box route calls can share the same pagination code.
 function parseUrl(path: string, origin = 'https://graph.microsoft.com/v1.0'): URL {
   return new URL(path, origin);
 }
 
+// Graph uses `$top` for page sizing. Clamp invalid values back to a documented
+// fallback rather than leaking NaN into pagination.
 function parseTop(url: URL, fallback: number): number {
   const top = Number.parseInt(String(url.searchParams.get('$top') || ''), 10);
   return Number.isFinite(top) && top > 0 ? top : fallback;
 }
 
+// Offset is an email-connect pagination convenience encoded in generated links;
+// real Graph tokens are opaque, but tests still need deterministic page cuts.
 function parseOffset(url: URL): number {
   const offset = Number.parseInt(String(url.searchParams.get('offset') || '0'), 10);
   return Number.isFinite(offset) && offset >= 0 ? offset : 0;
 }
 
+// Support the high-value `receivedDateTime ge ...` filter shape used by sync
+// and backfill consumers without pretending to implement the full OData grammar.
 function receivedAfterFromFilter(value: string | null): string | null {
   if (!value) return null;
-  const match = value.match(/receivedDateTime ge ([^ )]+)/);
+  const match = value.match(GRAPH_RECEIVED_AFTER_FILTER_PATTERN);
   if (!match) return null;
-  const candidate = String(match[1] || '').trim().replace(/^'|'$/g, '');
+  const candidate = String(match[1] || '').trim().replace(GRAPH_FILTER_QUOTE_EDGE_PATTERN, '');
   const parsed = new Date(candidate);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+// Continuation links must be absolute URLs pointing back at the mock server so
+// non-JS black-box consumers can follow them without SDK assistance.
 function encodeQueryUrl(baseUrl: string, path: string, params: Record<string, string | number | null | undefined>): string {
   const url = new URL(path, baseUrl);
   for (const [key, value] of Object.entries(params)) {
@@ -40,10 +62,14 @@ function encodeQueryUrl(baseUrl: string, path: string, params: Record<string, st
   return url.toString();
 }
 
+// Delta and skip tokens are opaque to consumers, but internally they only need
+// enough state to preserve cursor, page offset, and filter continuity.
 function encodeOpaqueToken(payload: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
+// Invalid or tampered tokens decode to null so callers naturally fall back to
+// initial-delta behavior or provider-shaped stale-token errors.
 function decodeOpaqueToken<T extends Record<string, unknown>>(token: string | null): T | null {
   if (!token) return null;
   try {
@@ -53,6 +79,8 @@ function decodeOpaqueToken<T extends Record<string, unknown>>(token: string | nu
   }
 }
 
+// Graph wraps addresses under `emailAddress`; keep the conversion tiny and
+// centralized so messages, drafts, and item attachments all match.
 function messageAddress(address: string | null) {
   if (!address) return undefined;
   return {
@@ -62,6 +90,8 @@ function messageAddress(address: string | null) {
   };
 }
 
+// Normalize Graph recipient arrays into canonical address strings for the core
+// draft/message model.
 function normalizeRecipientList(value: unknown): string[] {
   return Array.isArray(value)
     ? value
@@ -70,6 +100,8 @@ function normalizeRecipientList(value: unknown): string[] {
     : [];
 }
 
+// HTML escaping is only used for generated HTML wrappers, not for sanitizing
+// arbitrary application HTML.
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -79,34 +111,40 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+// Text-body negotiation derives plain text from HTML when callers request
+// `Prefer: outlook.body-content-type="text"`.
 function stripHtml(value: string): string {
   return value
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(GRAPH_STYLE_BLOCK_PATTERN, ' ')
+    .replace(GRAPH_SCRIPT_BLOCK_PATTERN, ' ')
+    .replace(HTML_TAG_PATTERN, ' ')
+    .replace(WHITESPACE_RUN_PATTERN, ' ')
     .trim();
 }
 
+// Plain text bodies are wrapped in minimal HTML when callers request Graph's
+// default HTML body shape.
 function toHtmlBody(bodyText: string): string {
   if (!bodyText) return '';
   return `<html><body><pre>${escapeHtml(bodyText)}</pre></body></html>`;
 }
 
+// Graph defaults to HTML bodies unless a caller explicitly asks for text.
 function bodyContentPreference(value: string | null | undefined): 'text' | 'html' {
   const normalized = String(value || '').toLowerCase();
   return normalized === 'text' ? 'text' : 'html';
 }
 
+// Parse Graph's body-preference header at the provider edge so both route
+// handlers and resource builders receive the same normalized preference.
 function parsePreferBodyContentType(headerValue: string | null | undefined): 'text' | 'html' | null {
-  // Graph uses `Prefer: outlook.body-content-type="..."` to negotiate the
-  // body payload shape. Parse it once here so HTTP routes and white-box helpers
-  // stay aligned on the same rule.
   if (!headerValue) return null;
-  const match = String(headerValue).match(/outlook\.body-content-type\s*=\s*"?(text|html)"?/i);
+  const match = String(headerValue).match(GRAPH_PREFER_BODY_CONTENT_TYPE_PATTERN);
   return match?.[1] ? bodyContentPreference(match[1]) : null;
 }
 
+// Parse Graph compose bodies while preserving the original content type so later
+// reads can negotiate text/html without losing compose intent.
 function parseGraphBody(payload: unknown): { bodyText: string; bodyHtml: string | null } {
   const body = payload && typeof payload === 'object' ? (payload as { content?: unknown; contentType?: unknown }) : null;
   const content = typeof body?.content === 'string' ? body.content : '';
@@ -127,6 +165,7 @@ function parseGraphBody(payload: unknown): { bodyText: string; bodyHtml: string 
   };
 }
 
+// Convert canonical body fields into Graph's `{contentType, content}` wrapper.
 function graphBodyValue(bodyText: string | null, bodyHtml: string | null, preference: 'text' | 'html') {
   if (preference === 'text') {
     return {
@@ -140,12 +179,16 @@ function graphBodyValue(bodyText: string | null, bodyHtml: string | null, prefer
   };
 }
 
+// Attachment type names are provider contract strings, so keep them adjacent to
+// the resource renderer rather than leaking them into core types.
 function attachmentTypeName(attachment: MailboxAttachment): string {
   if (attachment.attachmentType === 'reference') return '#microsoft.graph.referenceAttachment';
   if (attachment.attachmentType === 'item') return '#microsoft.graph.itemAttachment';
   return '#microsoft.graph.fileAttachment';
 }
 
+// Item attachments expose a nested message-like resource. The mock maps only
+// the fields consumers commonly inspect while preserving body preference rules.
 function buildEmbeddedMessage(attachment: MailboxAttachment, preference: 'text' | 'html') {
   if (!attachment.embeddedMessage) return undefined;
   return {
@@ -171,13 +214,13 @@ function buildEmbeddedMessage(attachment: MailboxAttachment, preference: 'text' 
   };
 }
 
+// Convert core attachments into the richer Graph attachment families at the
+// edge. That keeps core storage provider-neutral while Graph callers still see
+// `fileAttachment`, `itemAttachment`, or `referenceAttachment`.
 function graphAttachmentResource(
   attachment: MailboxAttachment,
   options?: { inlineContent?: boolean | undefined; bodyContentType?: 'text' | 'html' | undefined },
 ) {
-  // Convert core attachments into the richer Graph attachment families at the
-  // edge. That keeps core storage provider-neutral while Graph callers still
-  // see `fileAttachment`, `itemAttachment`, or `referenceAttachment`.
   const preference = options?.bodyContentType || 'html';
   const base = {
     '@odata.type': attachmentTypeName(attachment),
@@ -260,6 +303,8 @@ type GraphBodyOptions = {
 
 const graphRuntimeByEngine = new WeakMap<EmailConnectEngine, GraphEngineRuntime>();
 
+// Runtime state belongs to the provider package because folder placement and
+// upload sessions are Graph-specific projections over canonical mailbox data.
 function graphEngineRuntime(engine: EmailConnectEngine): GraphEngineRuntime {
   let runtime = graphRuntimeByEngine.get(engine);
   if (!runtime) {
@@ -272,6 +317,8 @@ function graphEngineRuntime(engine: EmailConnectEngine): GraphEngineRuntime {
   return runtime;
 }
 
+// Initialize Graph runtime lazily from canonical messages so hand-seeded
+// mailboxes immediately appear in inbox without explicit folder setup.
 function graphMailboxRuntime(engine: EmailConnectEngine, mailbox: MailboxRecord): GraphMailboxRuntime {
   // Graph-only mailbox state such as folder placement and opaque delta/upload
   // cursors stays here rather than leaking into core. Core owns canonical mail
@@ -298,16 +345,22 @@ function graphMailboxRuntime(engine: EmailConnectEngine, mailbox: MailboxRecord)
   return mailboxRuntime;
 }
 
+// Folder events need their own cursor sequence because move/copy operations can
+// create delta-visible changes without adding core message change rows.
 function nextMailboxCursor(engine: EmailConnectEngine, mailbox: MailboxRecord): number {
   const runtime = graphMailboxRuntime(engine, mailbox);
   runtime.lastCursor += 1;
   return runtime.lastCursor;
 }
 
+// Folder lookup defaults to inbox because that is the normal initial placement
+// for seeded inbound messages.
 function folderForMessage(engine: EmailConnectEngine, mailbox: MailboxRecord, providerMessageId: string): string {
   return graphMailboxRuntime(engine, mailbox).folderByMessageId.get(providerMessageId) || 'inbox';
 }
 
+// Folder events are recorded separately from canonical message changes so inbox
+// delta can express moves without rewriting message history.
 function recordFolderEvent(
   engine: EmailConnectEngine,
   mailbox: MailboxRecord,
@@ -324,6 +377,8 @@ function recordFolderEvent(
   });
 }
 
+// Setting a folder emits both removal and addition events to approximate how
+// folder-scoped delta clients observe moves.
 function setFolder(
   engine: EmailConnectEngine,
   mailbox: MailboxRecord,
@@ -338,6 +393,8 @@ function setFolder(
   recordFolderEvent(engine, mailbox, providerMessageId, folderId, 'added_to_folder');
 }
 
+// Internet headers are exposed on Graph message resources and raw MIME views,
+// so build them from canonical message fields plus caller-provided headers.
 function buildInternetHeaders(message: MailboxMessage) {
   return [
     ...(message.messageId ? [{ name: 'Message-ID', value: message.messageId }] : []),
@@ -350,13 +407,12 @@ function buildInternetHeaders(message: MailboxMessage) {
   ];
 }
 
+// Keep the Graph message projection centralized so list/get/delta/move/copy all
+// return the same resource shape, including body preference and folder placement.
 function messageToResource(
   message: MailboxMessage,
   options: GraphBodyOptions & { parentFolderId: string },
 ) {
-  // Keep the Graph message projection centralized so list/get/delta/move/copy
-  // all return the same resource shape, including body preference handling and
-  // folder placement.
   const preference = options.bodyContentType || 'html';
   const body = graphBodyValue(message.bodyText, message.bodyHtml, preference);
   return {
@@ -384,6 +440,8 @@ function messageToResource(
   };
 }
 
+// Draft resources share Graph's message shape but stay marked as draft and live
+// under the synthetic drafts folder.
 function draftToResource(draft: MailboxDraft, options?: GraphBodyOptions) {
   const preference = options?.bodyContentType || 'html';
   const body = graphBodyValue(draft.bodyText, draft.bodyHtml, preference);
@@ -408,10 +466,10 @@ function draftToResource(draft: MailboxDraft, options?: GraphBodyOptions) {
   };
 }
 
+// Graph routes address drafts and messages through overlapping path shapes.
+// Resolve that overlap in one place so every downstream operation agrees on the
+// provider id's container.
 function resolveContainer(engine: EmailConnectEngine, mailbox: MailboxRecord, providerMessageId: string): GraphContainer {
-  // Graph routes address drafts and messages through overlapping path shapes.
-  // Resolve that overlap in one place so message, MIME, attachment, and send
-  // operations all agree on what a provider id refers to.
   const draft = engine.getDraft(mailbox.id, providerMessageId);
   if (draft) {
     return {
@@ -431,10 +489,14 @@ function resolveContainer(engine: EmailConnectEngine, mailbox: MailboxRecord, pr
   };
 }
 
+// Attachment helpers operate over both messages and drafts because Graph exposes
+// nearly identical attachment routes for each container type.
 function containerAttachments(container: GraphContainer): MailboxAttachment[] {
   return container.kind === 'draft' ? container.draft.attachments : container.message.attachments;
 }
 
+// Resolve attachment ids at the provider boundary so NotFound errors are
+// consistent across metadata reads and `$value` downloads.
 function attachmentFromContainer(container: GraphContainer, attachmentId: string): MailboxAttachment {
   const attachment = containerAttachments(container).find((entry) => entry.providerAttachmentId === attachmentId);
   if (!attachment) {
@@ -443,6 +505,8 @@ function attachmentFromContainer(container: GraphContainer, attachmentId: string
   return attachment;
 }
 
+// Extract mutable compose fields from Graph PATCH bodies without conflating them
+// with attachment mutation.
 function draftPatchFromBody(body: Record<string, unknown>): {
   to?: string[];
   subject?: string;
@@ -463,10 +527,9 @@ function draftPatchFromBody(body: Record<string, unknown>): {
   };
 }
 
+// Normalize Graph request payloads into provider-neutral attachment seeds so
+// white-box seeding and black-box HTTP mutation share the same storage path.
 function graphAttachmentSeed(entry: unknown): AttachmentSeed | null {
-  // Normalize Graph request payloads into provider-neutral attachment seeds so
-  // white-box seeding and black-box HTTP mutation share the same downstream
-  // storage path.
   if (!entry || typeof entry !== 'object') return null;
   const body = entry as Record<string, unknown>;
   const type = String(body['@odata.type'] || body.attachmentType || '').toLowerCase();
@@ -515,6 +578,8 @@ function graphAttachmentSeed(entry: unknown): AttachmentSeed | null {
   };
 }
 
+// `/me/sendMail` accepts a nested Graph message resource rather than the core
+// seed format. Parse it here so JSON send and MIME send converge on one path.
 function parseSendMailRequest(body: Record<string, unknown>): {
   saveToSentItems: boolean;
   message: {
@@ -525,9 +590,6 @@ function parseSendMailRequest(body: Record<string, unknown>): {
     attachments: AttachmentSeed[];
   };
 } {
-  // `/me/sendMail` accepts a nested Graph message resource rather than the core
-  // seed format. Parse it here so JSON send and MIME send converge on the same
-  // canonical send behavior.
   const message = body.message && typeof body.message === 'object' ? (body.message as Record<string, unknown>) : body;
   return {
     saveToSentItems: body.saveToSentItems == null ? true : Boolean(body.saveToSentItems),
@@ -544,6 +606,8 @@ function parseSendMailRequest(body: Record<string, unknown>): {
   };
 }
 
+// MIME send parsing produces decoded file attachments; this adapter converts
+// them into the same seed shape JSON compose paths use.
 function parsedFileAttachmentSeed(attachment: {
   filename: string;
   mimeType: string;
@@ -561,6 +625,8 @@ function parsedFileAttachmentSeed(attachment: {
   };
 }
 
+// Copying or sending existing attachments should preserve provider ids and
+// Graph-specific metadata such as inline CID and reference/item details.
 function mailboxAttachmentToSeed(attachment: MailboxAttachment): AttachmentSeed {
   return {
     providerAttachmentId: attachment.providerAttachmentId,
@@ -577,12 +643,20 @@ function mailboxAttachmentToSeed(attachment: MailboxAttachment): AttachmentSeed 
   };
 }
 
+/**
+ * Canonical Microsoft Graph mail-plane semantic layer.
+ *
+ * Core stores provider-neutral mailbox records. This service owns the Graph
+ * projection: message resources, body preferences, folder-scoped delta,
+ * compose/send, and upload sessions.
+ */
 export class GraphService {
-  // GraphService owns Microsoft-specific mail-plane semantics. Core stores the
-  // canonical mailbox state; this layer projects it into Graph resources,
-  // delta feeds, folder movement, MIME views, and upload-session behavior.
+  // The service receives the shared engine so SDK and HTTP callers exercise the
+  // same Graph projection over canonical mailbox state.
   constructor(private readonly engine: EmailConnectEngine) {}
 
+  // `/me` exposes mailbox identity for connected-account validation and basic
+  // black-box smoke tests.
   async getMe(mailboxId: string) {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -594,14 +668,14 @@ export class GraphService {
     };
   }
 
+  // `/me/messages` spans the mailbox, not just inbox. Folder placement still
+  // matters because Graph surfaces parent folder ids on each returned item.
   async listMessages(
     mailboxId: string,
     path: string,
     baseUrl: string,
     options?: GraphBodyOptions,
   ) {
-    // `/me/messages` spans the mailbox, not just inbox. Folder placement still
-    // matters because Graph surfaces parent folder ids on each returned item.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -638,15 +712,15 @@ export class GraphService {
     };
   }
 
+  // Inbox listing is a projection over the shared mailbox state plus the
+  // Graph-owned folder runtime. That separation is why move/copy can affect
+  // inbox reads without rewriting canonical messages.
   async listInboxMessages(
     mailboxId: string,
     path: string,
     baseUrl: string,
     options?: GraphBodyOptions,
   ) {
-    // Inbox listing is a projection over the shared mailbox state plus the
-    // Graph-owned folder runtime. That separation is why move/copy can affect
-    // inbox reads without rewriting canonical messages.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -684,15 +758,15 @@ export class GraphService {
     };
   }
 
+  // Delta links are intentionally opaque to consumers. The mock keeps enough
+  // state to preserve ordering and stale-token behavior without exposing the
+  // internal cursor format as part of the product contract.
   async delta(
     mailboxId: string,
     path: string,
     baseUrl: string,
     options?: GraphBodyOptions,
   ) {
-    // Delta links are intentionally opaque to consumers. The mock keeps enough
-    // state to preserve ordering and stale-token behavior without exposing the
-    // internal cursor format as part of the product contract.
     const mailbox = this.engine.requireMailbox(mailboxId);
     const runtime = graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -787,6 +861,8 @@ export class GraphService {
     };
   }
 
+  // Message reads resolve drafts and messages through one id namespace because
+  // Graph compose routes address drafts as messages.
   async getMessage(mailboxId: string, providerMessageId: string, options?: GraphBodyOptions) {
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
@@ -801,15 +877,15 @@ export class GraphService {
         });
   }
 
+  // `$value` is Graph's raw MIME view. Re-render from canonical state instead
+  // of storing serialized MIME blobs so later mutations and seeds keep a single
+  // source of truth.
   async getMessageValue(mailboxId: string, providerMessageId: string): Promise<Uint8Array> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.message.value');
     const container = resolveContainer(this.engine, mailbox, providerMessageId);
-    // `$value` is Graph's raw MIME view. Re-render from canonical state instead
-    // of storing serialized MIME blobs so later mutations and seeds keep a
-    // single source of truth.
     const mime = container.kind === 'draft'
       ? renderRawEmail({
           to: container.draft.to,
@@ -850,9 +926,9 @@ export class GraphService {
     return new Uint8Array(Buffer.from(mime, 'utf8'));
   }
 
+  // Attachment listing paginates over the resolved container so drafts and
+  // sent/received messages share one attachment surface.
   async listAttachmentsPage(mailboxId: string, providerMessageId: string, path: string, baseUrl: string) {
-    // Attachment listing paginates over the resolved container so drafts and
-    // sent/received messages share one attachment surface.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -875,10 +951,10 @@ export class GraphService {
     };
   }
 
+  // Graph sometimes omits `contentBytes` on attachment reads. Preserve that
+  // backend-config seam because real clients often have fallback logic for
+  // `$value` downloads.
   async getAttachment(mailboxId: string, providerMessageId: string, attachmentId: string, options?: GraphBodyOptions) {
-    // Graph sometimes omits `contentBytes` on attachment reads. Preserve that
-    // backend-config seam because real clients often have fallback logic for
-    // `$value` downloads.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -892,6 +968,8 @@ export class GraphService {
     });
   }
 
+  // `$value` serves only file attachments; item/reference attachments remain
+  // metadata resources like their Graph counterparts.
   async getAttachmentValue(mailboxId: string, providerMessageId: string, attachmentId: string): Promise<Uint8Array> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
@@ -905,10 +983,10 @@ export class GraphService {
     return new Uint8Array(attachment.contentBytes);
   }
 
+  // Reply drafts inherit thread identity and flip the directionality of the
+  // original message, which is the part many downstream compose flows care
+  // about more than exact quoted-body rendering.
   async createReplyDraft(mailboxId: string, providerMessageId: string) {
-    // Reply drafts inherit thread identity and flip the directionality of the
-    // original message, which is the part many downstream compose flows care
-    // about more than exact quoted-body rendering.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.createReply.post');
@@ -931,9 +1009,9 @@ export class GraphService {
     };
   }
 
+  // Draft creation accepts Graph resource-shaped JSON and normalizes it into
+  // the shared draft model so later patch/send/upload flows stay uniform.
   async createDraft(mailboxId: string, body: Record<string, unknown>) {
-    // Draft creation accepts Graph resource-shaped JSON and normalizes it into
-    // the shared draft model so later patch/send/upload flows stay uniform.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.messages.post');
@@ -954,9 +1032,9 @@ export class GraphService {
     return draftToResource(draft);
   }
 
+  // Patch only updates the mutable compose fields Graph exposes through this
+  // route; attachment upload stays on the dedicated upload-session path.
   async patchDraft(mailboxId: string, providerDraftId: string, body: Record<string, unknown>) {
-    // Patch only updates the mutable compose fields Graph exposes through this
-    // route; attachment upload stays on the dedicated upload-session path.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.message.patch');
@@ -964,6 +1042,8 @@ export class GraphService {
     return draftToResource(updated);
   }
 
+  // Draft send records outbox intent and materializes a sent-item copy because
+  // Graph clients commonly expect the sent message to become addressable.
   async sendDraft(mailboxId: string, providerDraftId: string) {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -972,8 +1052,6 @@ export class GraphService {
     if (!draft) {
       throw new NotFoundError(`Draft not found: ${providerDraftId}`);
     }
-    // Record the send in core before materializing the sent-item row so outbound
-    // observability stays consistent across draft-send and direct-send flows.
     this.engine.sendDraft(mailboxId, providerDraftId, 'graph', providerDraftId);
     const sentMessage = this.engine.appendMessage(mailboxId, {
       providerMessageId: providerDraftId,
@@ -991,6 +1069,8 @@ export class GraphService {
     return {};
   }
 
+  // Direct sendMail is normalized through the same outbox pipeline as draft
+  // send, with optional sent-item materialization controlled by the request.
   async sendMail(mailboxId: string, body: Record<string, unknown> | string | Uint8Array | Buffer) {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
@@ -1033,10 +1113,9 @@ export class GraphService {
     this.engine.deleteDraft(mailboxId, draft.providerDraftId);
   }
 
+  // Move changes Graph folder projection without cloning the canonical message,
+  // which matches how Graph exposes the same logical item in a new folder.
   async moveMessage(mailboxId: string, providerMessageId: string, destinationId: string, options?: GraphBodyOptions) {
-    // Move changes Graph folder projection without cloning the canonical
-    // message, which matches how Graph exposes the same logical item in a new
-    // folder rather than creating a second message.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1052,10 +1131,10 @@ export class GraphService {
     });
   }
 
+  // Copy intentionally materializes a second canonical message because Graph
+  // returns a distinct resource in the destination folder, not just a folder
+  // projection change.
   async copyMessage(mailboxId: string, providerMessageId: string, destinationId: string, options?: GraphBodyOptions) {
-    // Copy intentionally materializes a second canonical message because Graph
-    // returns a distinct resource in the destination folder, not just a folder
-    // projection change.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1090,16 +1169,14 @@ export class GraphService {
     });
   }
 
+  // Upload-session creation returns an opaque upload URL and stores ordered
+  // chunk state in the provider runtime until the final PUT completes.
   async createAttachmentUploadSession(
     mailboxId: string,
     providerMessageId: string,
     body: Record<string, unknown>,
     baseUrl: string,
   ) {
-    // Upload sessions are deliberately provider-owned runtime state because the
-    // semantics are Graph-specific: opaque URLs, ordered ranges, and chunk
-    // completion behavior. The stored attachment still lands in core once the
-    // upload finishes.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1152,12 +1229,15 @@ export class GraphService {
     };
   }
 
+  // Upload sessions are ordered and stateful. Reject out-of-order or malformed
+  // chunks so callers can exercise the same resume/retry logic they need in
+  // production Graph integrations.
   async uploadAttachmentChunk(
     uploadPath: string,
     bytes: Uint8Array,
     headers: Record<string, string | string[] | undefined>,
   ) {
-    const sessionId = uploadPath.match(/\/__email-connect\/upload\/graph\/([^/?]+)/)?.[1];
+    const sessionId = uploadPath.match(GRAPH_UPLOAD_SESSION_PATH_PATTERN)?.[1];
     if (!sessionId) {
       throw new NotFoundError('Graph upload session not found');
     }
@@ -1171,16 +1251,13 @@ export class GraphService {
       throw new NotFoundError('Graph upload session expired');
     }
     const contentRange = String(headers['content-range'] || '').trim();
-    const match = contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+)$/i);
+    const match = contentRange.match(GRAPH_CONTENT_RANGE_PATTERN);
     if (!match) {
       throw new ConflictError('Content-Range header is required for Graph upload sessions');
     }
     const start = Number(match[1]);
     const end = Number(match[2]);
     const total = Number(match[3]);
-    // Upload sessions are ordered and stateful. Reject out-of-order or malformed
-    // chunks so callers can exercise the same resume/retry logic they need in
-    // production Graph integrations.
     if (total !== session.size || start !== session.nextExpectedStart || end < start || end + 1 - start !== bytes.byteLength) {
       throw new ConflictError('Graph upload chunk did not match next expected range');
     }
@@ -1220,9 +1297,9 @@ export class GraphService {
     };
   }
 
+  // Graph DELETE applies to both drafts and messages depending on the id, so
+  // resolve drafts first and then fall through to message deletion.
   async deleteMessageResource(mailboxId: string, providerMessageId: string) {
-    // Graph DELETE applies to both drafts and messages depending on the id, so
-    // resolve drafts first and then fall through to message deletion.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1233,10 +1310,10 @@ export class GraphService {
     this.engine.deleteMessage(mailboxId, providerMessageId);
   }
 
+  // Graph clients sometimes send RFC822 payloads instead of JSON message
+  // objects. Normalize that path here so both entrypoints share the same send
+  // pipeline after parsing.
   private parseMimeSendBody(body: string | Uint8Array | Buffer) {
-    // Graph clients sometimes send RFC822 payloads instead of JSON message
-    // objects. Normalize that path here so both entrypoints share the same send
-    // pipeline after parsing.
     const raw = typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
     const parsed = parseRawEmailBase64(raw.trim());
     return {
@@ -1258,15 +1335,15 @@ export class GraphService {
     };
   }
 
+  // Delta should describe the inbox projection, not the whole mailbox. Once a
+  // message moves out of inbox, folder events communicate that removal and we
+  // stop returning the full resource from the inbox delta stream.
   private deltaItemForChange(
     mailbox: MailboxRecord,
     change: MailboxChange,
     message: MailboxMessage | undefined,
     bodyContentType?: 'text' | 'html',
   ) {
-    // Delta should describe the inbox projection, not the whole mailbox. Once a
-    // message moves out of inbox, folder events communicate that removal and we
-    // stop returning the full resource from the inbox delta stream.
     if (change.kind === 'message_deleted') {
       return {
         id: change.providerMessageId,
@@ -1285,6 +1362,8 @@ export class GraphService {
     });
   }
 
+  // Folder-add events need to rematerialize the current resource because a
+  // message moved back into inbox may have changed since it was first seeded.
   private deltaItemForFolderAdd(
     mailbox: MailboxRecord,
     providerMessageId: string,

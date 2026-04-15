@@ -2,20 +2,32 @@ import { EmailConnectError, type EmailConnectProvider, type MailboxRecord } from
 import { defaultGmailScopesForCapabilityMode, isGmailOperationAuthorized } from './capabilities.js';
 import { GmailService } from './service.js';
 
+// Gmail REST facade route captures are named so route shape changes are visible
+// without scanning the full handler body.
+const GMAIL_MESSAGE_ROUTE_PATTERN = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/;
+const GMAIL_ATTACHMENT_ROUTE_PATTERN = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/;
+const GMAIL_THREAD_ROUTE_PATTERN = /^\/gmail\/v1\/users\/me\/threads\/([^/]+)$/;
+
+// Body-bearing Gmail reads require stronger scopes than metadata reads, so route
+// authorization depends on the requested `format`.
 function gmailMessageGetOperation(format: string | null): string {
   const normalized = String(format || '').trim().toLowerCase();
   return normalized === 'full' || normalized === 'raw' ? 'gmail.messages.get.body' : 'gmail.messages.get.metadata';
 }
 
+// Thread reads follow the same metadata/body distinction as individual message
+// reads.
 function gmailThreadGetOperation(format: string | null): string {
   const normalized = String(format || '').trim().toLowerCase();
   return normalized === 'full' || normalized === 'raw' ? 'gmail.threads.get.body' : 'gmail.threads.get.metadata';
 }
 
+// Gmail search queries need broader read access than simple mailbox listing.
 function gmailListOperation(q: string | null): string {
   return String(q || '').trim() ? 'gmail.messages.list.search' : 'gmail.messages.list';
 }
 
+// Userinfo is intentionally Google/OIDC-shaped, separate from Gmail profile.
 function gmailUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   return {
     sub: mailbox.providerUserId,
@@ -69,6 +81,8 @@ export const gmailProvider: EmailConnectProvider = {
     },
   },
   http: {
+    // The provider handler is the black-box Gmail facade: it parses provider
+    // routes, checks scopes, and delegates semantic work to GmailService.
     async handle(context) {
       const { method, url } = context;
       const pathname = url.pathname;
@@ -192,7 +206,7 @@ export const gmailProvider: EmailConnectProvider = {
         return true;
       }
 
-      const messageMatch = context.matchPath(pathname, /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/);
+      const messageMatch = context.matchPath(pathname, GMAIL_MESSAGE_ROUTE_PATTERN);
       if (method === 'GET' && messageMatch?.[1]) {
         const format = url.searchParams.get('format');
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, gmailMessageGetOperation(format));
@@ -210,7 +224,7 @@ export const gmailProvider: EmailConnectProvider = {
         return true;
       }
 
-      const attachmentMatch = context.matchPath(pathname, /^\/gmail\/v1\/users\/me\/messages\/([^/]+)\/attachments\/([^/]+)$/);
+      const attachmentMatch = context.matchPath(pathname, GMAIL_ATTACHMENT_ROUTE_PATTERN);
       if (method === 'GET' && attachmentMatch?.[1] && attachmentMatch?.[2]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.attachments.get');
         context.sendJson(
@@ -254,7 +268,7 @@ export const gmailProvider: EmailConnectProvider = {
         return true;
       }
 
-      const threadMatch = context.matchPath(pathname, /^\/gmail\/v1\/users\/me\/threads\/([^/]+)$/);
+      const threadMatch = context.matchPath(pathname, GMAIL_THREAD_ROUTE_PATTERN);
       if (method === 'GET' && threadMatch?.[1]) {
         const format = url.searchParams.get('format');
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, gmailThreadGetOperation(format));

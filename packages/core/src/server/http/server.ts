@@ -12,6 +12,22 @@ import {
   type EmailGenerationPlan,
 } from '../../testing/generation.js';
 
+// Host-level parsing patterns are intentionally framework-free but named so
+// auth parsing and control-route captures are easy to review.
+const BEARER_AUTHORIZATION_PATTERN = /^Bearer\s+(.+)$/i;
+const OAUTH_SCOPE_SEPARATOR_PATTERN = /\s+/;
+const TRUE_QUERY_VALUE_PATTERN = /^(1|true)$/i;
+const CONNECT_REQUEST_ACTION_ROUTE_PATTERN = /^\/__email-connect\/v1\/connect\/requests\/([^/]+)\/(approve|deny)$/;
+const CONTROL_MAILBOX_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)$/;
+const CONTROL_BACKEND_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/backend$/;
+const CONTROL_MESSAGES_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages$/;
+const CONTROL_GENERATE_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/generate$/;
+const CONTROL_REPLAY_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/replay\/([^/]+)$/;
+const CONTROL_ATTACHMENTS_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages\/([^/]+)\/attachments$/;
+const CONTROL_MESSAGE_ROUTE_PATTERN = /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages\/([^/]+)$/;
+
+// Read raw request bodies once at the host boundary so providers can choose
+// JSON, form, or byte parsing without owning stream plumbing.
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -29,6 +45,8 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
 }
 
+// OAuth token endpoints submit form-encoded bodies, so keep form parsing beside
+// JSON parsing instead of pushing it into each provider package.
 async function readFormBody(req: IncomingMessage): Promise<Record<string, string>> {
   const raw = await readBody(req);
   if (!raw.length) return {};
@@ -36,6 +54,8 @@ async function readFormBody(req: IncomingMessage): Promise<Record<string, string
   return Object.fromEntries(params.entries());
 }
 
+// Response helpers keep HTTP rendering boring and consistent across control
+// routes and provider route handlers.
 function applyHeaders(res: ServerResponse, headers: Record<string, string> | undefined): void {
   for (const [name, value] of Object.entries(headers || {})) {
     if (!String(name || '').trim()) continue;
@@ -43,6 +63,8 @@ function applyHeaders(res: ServerResponse, headers: Record<string, string> | und
   }
 }
 
+// JSON responses are pretty-printed because this server is also an inspection
+// tool during local black-box integration development.
 function sendJson(
   res: ServerResponse,
   statusCode: number,
@@ -56,6 +78,8 @@ function sendJson(
   res.end(payload);
 }
 
+// HTML is reserved for the minimal consent page; product docs/UI should live
+// outside the mock server.
 function sendHtml(
   res: ServerResponse,
   statusCode: number,
@@ -68,6 +92,8 @@ function sendHtml(
   res.end(body);
 }
 
+// Text responses are used for provider endpoints that intentionally return an
+// empty body, such as revoke and accepted send operations.
 function sendText(
   res: ServerResponse,
   statusCode: number,
@@ -80,6 +106,7 @@ function sendText(
   res.end(body);
 }
 
+// Byte responses are the black-box attachment and raw MIME serving path.
 function sendBytes(
   res: ServerResponse,
   statusCode: number,
@@ -92,15 +119,19 @@ function sendBytes(
   res.end(Buffer.from(bytes));
 }
 
+// Provider facades use bearer tokens exactly like real Gmail/Graph APIs; admin
+// control routes use a separate header token.
 function parseBearerToken(req: IncomingMessage): string {
   const header = String(req.headers.authorization || '');
-  const match = header.match(/^Bearer\s+(.+)$/i);
+  const match = header.match(BEARER_AUTHORIZATION_PATTERN);
   if (!match?.[1]) {
     throw new UnauthorizedError('Missing Bearer token');
   }
   return match[1];
 }
 
+// The control plane can mutate mailboxes and faults, so protect it even in a
+// local mock server.
 function ensureAdminToken(req: IncomingMessage, expectedToken: string): void {
   const provided = String(req.headers['x-email-connect-admin-token'] || '').trim();
   if (!provided || provided !== expectedToken) {
@@ -108,21 +139,27 @@ function ensureAdminToken(req: IncomingMessage, expectedToken: string): void {
   }
 }
 
+// Route binders stay regex-based to avoid a framework dependency in the core
+// package.
 function matchPath(pathname: string, pattern: RegExp): RegExpMatchArray | null {
   return pathname.match(pattern);
 }
 
+// OAuth scopes are space-delimited in both Google and Microsoft authorization
+// URLs and token requests.
 function splitScopes(raw: string | null): string[] {
   return String(raw || '')
-    .split(/\s+/)
+    .split(OAUTH_SCOPE_SEPARATOR_PATTERN)
     .map((value) => value.trim())
     .filter(Boolean);
 }
 
+// Query booleans are used for provider knobs like Gmail incremental consent.
 function parseBooleanQuery(value: string | null): boolean {
-  return /^(1|true)$/i.test(String(value || '').trim());
+  return TRUE_QUERY_VALUE_PATTERN.test(String(value || '').trim());
 }
 
+// Human-friendly provider names are only for the tiny consent page.
 function providerDisplayName(provider: ProviderKind): string {
   if (provider === 'gmail') return 'Google';
   if (provider === 'graph') return 'Microsoft';
@@ -193,9 +230,13 @@ export class EmailConnectHttpServer {
   readonly engine: EmailConnectEngine;
   readonly adminToken: string;
 
+  // Runtime-only HTTP state is kept separate from the engine so closing and
+  // restarting the facade never mutates mailbox data.
   private server: Server | null = null;
   private listeningAddress: string | null = null;
 
+  // The server can own its own engine for simple demos or wrap a caller-supplied
+  // engine when tests need direct white-box inspection.
   constructor(options?: { engine?: EmailConnectEngine; adminToken?: string }) {
     this.engine = options?.engine || new EmailConnectEngine();
     this.adminToken = options?.adminToken || `admin_${randomBytes(16).toString('base64url')}`;
@@ -208,6 +249,8 @@ export class EmailConnectHttpServer {
     return this.listeningAddress;
   }
 
+  // Listen binds the control plane and all installed provider facades to one
+  // origin so black-box clients can follow provider-issued absolute links.
   async listen(options?: { host?: string; port?: number }): Promise<{ baseUrl: string; adminToken: string }> {
     if (this.server) {
       return {
@@ -246,6 +289,8 @@ export class EmailConnectHttpServer {
     };
   }
 
+  // Closing clears the cached origin so subsequent tests can restart the server
+  // on a fresh ephemeral port without leaking state.
   async close(): Promise<void> {
     if (!this.server) return;
     await new Promise<void>((resolve, reject) => {
@@ -255,6 +300,8 @@ export class EmailConnectHttpServer {
     this.listeningAddress = null;
   }
 
+  // The top-level handler separates consent, admin control, and provider routes
+  // before handing requests to provider packages.
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = String(req.method || 'GET').toUpperCase();
     const url = new URL(String(req.url || '/'), this.baseUrl || 'http://127.0.0.1');
@@ -306,10 +353,9 @@ export class EmailConnectHttpServer {
     });
   }
 
+  // Control routes are the operator surface for seeding, inspection, and fault
+  // injection regardless of which mock provider packages are installed.
   private async handleControl(method: string, pathname: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // Control routes intentionally stay provider-neutral. They are the operator
-    // surface for seeding, inspection, and fault injection regardless of which
-    // mock provider packages are installed.
     if (method === 'GET' && pathname === '/__email-connect/v1/mailboxes') {
       sendJson(res, 200, {
         data: this.engine.listMailboxes(),
@@ -381,7 +427,7 @@ export class EmailConnectHttpServer {
       return;
     }
 
-    const requestActionMatch = matchPath(pathname, /^\/__email-connect\/v1\/connect\/requests\/([^/]+)\/(approve|deny)$/);
+    const requestActionMatch = matchPath(pathname, CONNECT_REQUEST_ACTION_ROUTE_PATTERN);
     if (method === 'POST' && requestActionMatch?.[1] && requestActionMatch?.[2]) {
       const body = await readJsonBody(req);
       const requestId = decodeURIComponent(requestActionMatch[1]);
@@ -405,7 +451,7 @@ export class EmailConnectHttpServer {
       return;
     }
 
-    const mailboxMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)$/);
+    const mailboxMatch = matchPath(pathname, CONTROL_MAILBOX_ROUTE_PATTERN);
     if (method === 'GET' && mailboxMatch?.[1]) {
       sendJson(res, 200, { data: this.engine.snapshotMailbox(decodeURIComponent(mailboxMatch[1])) });
       return;
@@ -413,7 +459,7 @@ export class EmailConnectHttpServer {
 
     // Mailbox mutation routes are intentionally direct and low-level: they are
     // for scenario construction and adversarial test setup, not end-user UX.
-    const backendMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/backend$/);
+    const backendMatch = matchPath(pathname, CONTROL_BACKEND_ROUTE_PATTERN);
     if (method === 'PATCH' && backendMatch?.[1]) {
       const body = await readJsonBody(req);
       sendJson(res, 200, {
@@ -422,7 +468,7 @@ export class EmailConnectHttpServer {
       return;
     }
 
-    const messagesMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages$/);
+    const messagesMatch = matchPath(pathname, CONTROL_MESSAGES_ROUTE_PATTERN);
     if (method === 'POST' && messagesMatch?.[1]) {
       const body = await readJsonBody(req);
       sendJson(res, 201, {
@@ -431,7 +477,7 @@ export class EmailConnectHttpServer {
       return;
     }
 
-    const generateMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/generate$/);
+    const generateMatch = matchPath(pathname, CONTROL_GENERATE_ROUTE_PATTERN);
     if (method === 'POST' && generateMatch?.[1]) {
       const body = await readJsonBody(req);
       const templateSource = Array.isArray(body.templates)
@@ -450,7 +496,7 @@ export class EmailConnectHttpServer {
       return;
     }
 
-    const replayMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/replay\/([^/]+)$/);
+    const replayMatch = matchPath(pathname, CONTROL_REPLAY_ROUTE_PATTERN);
     if (method === 'POST' && replayMatch?.[1] && replayMatch?.[2]) {
       this.engine.appendReplayChange(decodeURIComponent(replayMatch[1]), decodeURIComponent(replayMatch[2]));
       sendJson(res, 200, { success: true });
@@ -459,7 +505,7 @@ export class EmailConnectHttpServer {
 
     const attachmentMatch = matchPath(
       pathname,
-      /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages\/([^/]+)\/attachments$/,
+      CONTROL_ATTACHMENTS_ROUTE_PATTERN,
     );
     if (method === 'POST' && attachmentMatch?.[1] && attachmentMatch?.[2]) {
       const body = await readJsonBody(req);
@@ -482,7 +528,7 @@ export class EmailConnectHttpServer {
 
     const messagePatchMatch = matchPath(
       pathname,
-      /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/messages\/([^/]+)$/,
+      CONTROL_MESSAGE_ROUTE_PATTERN,
     );
     if (method === 'PATCH' && messagePatchMatch?.[1] && messagePatchMatch?.[2]) {
       const body = await readJsonBody(req);
@@ -508,9 +554,9 @@ export class EmailConnectHttpServer {
     });
   }
 
+  // The browser consent POST exists for manual black-box debugging; automated
+  // tests should generally use the JSON approve/deny control routes.
   private async handleConsentAction(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // This form POST is only for the minimal interactive consent page above.
-    // Programmatic black-box tests should prefer the JSON control-plane routes.
     const body = await readFormBody(req);
     const requestId = String(body.request_id || '').trim();
     const decision = String(body.decision || '').trim().toLowerCase();
@@ -533,14 +579,13 @@ export class EmailConnectHttpServer {
     res.end();
   }
 
+  // Consent resolution applies auto-approve, auto-deny, and mailbox-picking
+  // rules before redirecting browser flows back to the client app.
   private async completeOrRenderConsent(
     provider: ProviderKind,
     request: AuthorizationRequestSnapshot,
     res: ServerResponse,
   ): Promise<void> {
-    // Consent resolution stays centralized because browser-driven connect flows
-    // need one place that applies auto-approve, auto-deny, and mailbox-picking
-    // rules before redirecting back to the client app.
     const providerMailboxesFull = this.engine.listMailboxes().filter((mailbox) => mailbox.provider === provider);
     const providerMailboxes = providerMailboxesFull.map((mailbox) => ({
       id: mailbox.id,
@@ -584,6 +629,8 @@ export class EmailConnectHttpServer {
     );
   }
 
+  // Request-local settings win first; then login-hint or single-mailbox
+  // heuristics can auto-resolve consent for lightweight browser flows.
   private resolveConsentMode(
     mailboxes: Array<{
       id: string;
@@ -594,8 +641,6 @@ export class EmailConnectHttpServer {
     }>,
     request: AuthorizationRequestSnapshot,
   ): ConnectConsentMode {
-    // Request-local settings win first; then login-hint or single-mailbox
-    // heuristics can auto-resolve consent for lightweight browser flows.
     const direct = request.mailboxId ? mailboxes.find((mailbox) => mailbox.id === request.mailboxId) : null;
     if (direct?.backend.connect?.consentMode) return direct.backend.connect.consentMode;
 
@@ -622,12 +667,12 @@ export class EmailConnectHttpServer {
     return request.consentMode;
   }
 
+  // Provider token endpoints all converge here so JSON token payloads and
+  // OAuth-style error mapping stay consistent across Gmail and Graph.
   private async respondWithTokenGrant(
     res: ServerResponse,
     issueGrant: () => ReturnType<EmailConnectEngine['connect']['exchangeAuthorizationCode']>,
   ): Promise<void> {
-    // Provider token endpoints all converge here so JSON token payloads and
-    // OAuth-style error mapping stay consistent across Gmail and Graph.
     try {
       const grant = issueGrant();
       sendJson(res, 200, {
@@ -644,12 +689,12 @@ export class EmailConnectHttpServer {
     }
   }
 
+  // Core raises typed errors, but token endpoints need provider-shaped OAuth
+  // payloads instead of generic application exceptions.
   private mapOAuthTokenError(error: unknown): {
     statusCode: number;
     body: { error: string; error_description: string };
   } {
-    // Core raises typed errors, but token endpoints need provider-shaped OAuth
-    // payloads instead of generic application exceptions.
     const message = error instanceof Error ? error.message : String(error);
     const lower = message.toLowerCase();
     if (lower.includes('temporarily_unavailable')) {

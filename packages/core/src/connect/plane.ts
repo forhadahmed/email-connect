@@ -40,6 +40,8 @@ function cleanString(value: string | null | undefined): string | null {
   return normalized || null;
 }
 
+// Token and request timestamps accept loose fixture inputs but are stored as
+// ISO strings so HTTP and SDK callers observe the same clock semantics.
 function normalizeDate(value: string | Date | null | undefined): string | null {
   if (value == null) return null;
   const parsed = value instanceof Date ? value : new Date(value);
@@ -47,15 +49,21 @@ function normalizeDate(value: string | Date | null | undefined): string | null {
   return parsed.toISOString();
 }
 
+// OAuth expiry values are expressed in seconds by providers, but the engine
+// clock stores ISO timestamps. Keep that conversion local to the connect plane.
 function isoPlusSeconds(baseIso: string, seconds: number): string {
   const baseMs = Date.parse(baseIso);
   return new Date(baseMs + seconds * 1000).toISOString();
 }
 
+// Use one timestamp comparison helper so expiry checks read consistently across
+// request, code, access-token, and refresh-token validation.
 function isoToMs(value: string): number {
   return Date.parse(value);
 }
 
+// Scope normalization is stable and order-preserving so tests can assert exact
+// token payloads while still avoiding duplicate grants.
 function normalizeScopeSet(scopes: string[] | readonly string[] | null | undefined): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -70,6 +78,8 @@ function normalizeScopeSet(scopes: string[] | readonly string[] | null | undefin
   return out;
 }
 
+// Public snapshots intentionally hide the raw refresh token while exposing
+// enough metadata for tests to verify grant state.
 function toSnapshot(auth: MailboxAuthRecord) {
   return {
     clientId: auth.clientId,
@@ -84,12 +94,16 @@ function toSnapshot(auth: MailboxAuthRecord) {
   };
 }
 
+// The mock issues unsigned JWT-like values. They are structurally useful for
+// consumers that parse ID tokens, but deliberately not cryptographic artifacts.
 function signedJwtPayload(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' }), 'utf8').toString('base64url');
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   return `${header}.${body}.email-connect`;
 }
 
+// PKCE validation is provider-neutral, so it belongs in the shared connect
+// plane instead of the Gmail or Graph packages.
 function codeChallengeMatches(challenge: string, method: 'plain' | 'S256', verifier: string): boolean {
   if (method === 'plain') return challenge === verifier;
   const encoded = createHash('sha256').update(verifier, 'utf8').digest('base64url');
@@ -105,18 +119,26 @@ function codeChallengeMatches(challenge: string, method: 'plain' | 'S256', verif
  * than leaking provider token state throughout the mail-plane services.
  */
 export class EmailConnectConnectPlane {
+  // These maps are the in-memory OAuth state machine: registered clients,
+  // pending consent requests, one-use auth codes, and active refresh handles.
   private readonly clients = new Map<string, OAuthClientRegistration>();
   private readonly requests = new Map<string, AuthorizationRequestSnapshot>();
   private readonly codes = new Map<string, AuthorizationCodeRecord>();
   private readonly refreshTokenToMailboxId = new Map<string, string>();
   private readonly tokenFailureBudget = new Map<string, number>();
 
+  // The connect plane is intentionally attached to one engine so OAuth grants
+  // and mailbox state cannot drift apart.
   constructor(private readonly engine: EmailConnectEngine) {}
 
+  // Provider endpoints are delegated through registered provider definitions so
+  // core never hardcodes Google or Microsoft URL shapes.
   providerEndpoints(provider: ProviderKind, baseUrl: string): ProviderEndpointUrls {
     return this.engine.requireProvider(provider).connect.providerEndpoints(baseUrl);
   }
 
+  // Client registration is intentionally strict because all later auth requests
+  // rely on this allowlist for redirect URI and client-secret validation.
   registerClient(input: OAuthClientInput): OAuthClientRegistration {
     const provider = input.provider;
     const clientId = cleanString(input.clientId) || this.engine.generateId(`${provider}-client`);
@@ -149,17 +171,23 @@ export class EmailConnectConnectPlane {
     return this.cloneClient(registration);
   }
 
+  // Return cloned clients so control-plane callers cannot mutate the connect
+  // registry out from under the engine.
   listClients(provider?: ProviderKind): OAuthClientRegistration[] {
     return Array.from(this.clients.values())
       .filter((client) => !provider || client.provider === provider)
       .map((client) => this.cloneClient(client));
   }
 
+  // Mailbox auth is exposed as a snapshot so black-box tests can inspect grant
+  // state without gaining access to raw mutable records.
   getMailboxAuth(mailboxId: string) {
     const mailbox = this.engine.requireMailbox(mailboxId);
     return toSnapshot(mailbox.auth);
   }
 
+  // Seed grants let scenarios start from post-consent, expired-token, or
+  // revoked-token states without needing to replay a browser flow first.
   seedMailboxGrant(mailboxId: string, seed: MailboxAuthSeed | undefined): void {
     const mailbox = this.engine.requireMailbox(mailboxId);
     const capabilityMode = seed?.capabilityMode || 'send';
@@ -186,6 +214,8 @@ export class EmailConnectConnectPlane {
     this.resetMailboxRuntime(mailbox.id);
   }
 
+  // Reset only runtime failure counters; persistent mailbox auth and backend
+  // knobs stay intact so scenarios remain deterministic.
   resetMailboxRuntime(mailboxId: string): void {
     this.tokenFailureBudget.delete(mailboxId);
   }
@@ -238,16 +268,22 @@ export class EmailConnectConnectPlane {
     return this.cloneRequest(request);
   }
 
+  // Authorization requests are listed for black-box control planes that need to
+  // approve or deny pending consent outside the browser form.
   listAuthorizationRequests(): AuthorizationRequestSnapshot[] {
     return Array.from(this.requests.values()).map((request) => this.cloneRequest(request));
   }
 
+  // Request lookup returns a clone because callers should approve/deny through
+  // the state machine rather than editing request objects directly.
   getAuthorizationRequest(requestId: string): AuthorizationRequestSnapshot {
     const request = this.requests.get(requestId);
     if (!request) throw new NotFoundError(`Authorization request not found: ${requestId}`);
     return this.cloneRequest(request);
   }
 
+  // Approval resolves the mailbox, computes the final scope grant, and issues a
+  // short-lived auth code; token material is not minted until code exchange.
   approveAuthorizationRequest(
     requestId: string,
     options?: { mailboxId?: string | null; grantedScopes?: string[] },
@@ -298,6 +334,8 @@ export class EmailConnectConnectPlane {
     };
   }
 
+  // Denial is represented as a provider-shaped redirect result so app callback
+  // handlers can test the same branch they use against real providers.
   denyAuthorizationRequest(
     requestId: string,
     providerError = 'access_denied',
@@ -436,6 +474,8 @@ export class EmailConnectConnectPlane {
     });
   }
 
+  // Revocation accepts either an access token or refresh token because Google
+  // and Microsoft clients may revoke different token handles.
   revokeToken(provider: ProviderKind, token: string): boolean {
     const clean = String(token || '').trim();
     if (!clean) return false;
@@ -452,14 +492,16 @@ export class EmailConnectConnectPlane {
     return true;
   }
 
+  // Userinfo/me payloads are provider-specific, but access-token validation is
+  // shared so revoked and expired grants behave consistently.
   getUserInfo(provider: ProviderKind, accessToken: string): Record<string, unknown> {
     const mailbox = this.authorizeMailboxAccess(provider, accessToken, 'profile.get');
     return this.engine.requireProvider(provider).connect.buildUserInfo(mailbox);
   }
 
+  // Provider services call through this gate instead of inspecting scopes or
+  // expiry directly, which keeps HTTP and white-box authorization consistent.
   authorizeMailboxAccess(provider: ProviderKind, accessToken: string, operation: string) {
-    // Provider services call through this gate instead of inspecting scopes or
-    // expiry directly, which keeps HTTP and white-box authorization consistent.
     const mailbox = this.findMailboxByCurrentToken(provider, accessToken);
     if (!mailbox) {
       throw new UnauthorizedError('Unknown mailbox access token');
@@ -476,6 +518,8 @@ export class EmailConnectConnectPlane {
     return mailbox;
   }
 
+  // Redirect construction is centralized so approve and deny results preserve
+  // identical state propagation and provider-shaped error parameters.
   private buildRedirectUrl(
     redirectUri: string,
     params: { code?: string | null; state?: string | null; error?: string | null; errorDescription?: string | null },
@@ -488,6 +532,8 @@ export class EmailConnectConnectPlane {
     return url.toString();
   }
 
+  // Token issuance rewrites the mailbox's active grant in place. That keeps the
+  // engine aligned with products that model one current delegated connection.
   private issueTokensForMailbox(
     mailboxId: string,
     params: {
@@ -499,9 +545,6 @@ export class EmailConnectConnectPlane {
       prompt: string | null;
     },
   ): OAuthTokenGrant {
-    // Token issuance rewrites the mailbox's active grant in place. That keeps
-    // the engine aligned with products that treat a mailbox connection as one
-    // current delegated grant rather than a bag of historical credentials.
     const mailbox = this.engine.requireMailbox(mailboxId);
     const provider = this.engine.requireProvider(mailbox.provider);
     const now = this.engine.nowIso();
@@ -539,6 +582,8 @@ export class EmailConnectConnectPlane {
     });
   }
 
+  // Refresh-token issuance is intentionally provider-mediated because Gmail and
+  // Microsoft differ on repeated offline consent and refresh rotation.
   private shouldIssueRefreshToken(
     mailboxId: string,
     params: { provider: ProviderKind; accessType: 'online' | 'offline'; prompt: string | null },
@@ -563,6 +608,8 @@ export class EmailConnectConnectPlane {
     });
   }
 
+  // Build the white-box token-grant object and the JSON token payload source
+  // from the same mailbox auth record to keep SDK and HTTP behavior aligned.
   private buildTokenGrant(
     mailboxId: string,
     options: { includeRefreshToken: boolean; includeIdToken: boolean },
@@ -595,6 +642,8 @@ export class EmailConnectConnectPlane {
     };
   }
 
+  // Client lookup is keyed by provider as well as id, so Gmail and Graph tests
+  // can safely reuse human-friendly client ids.
   private requireClient(provider: ProviderKind, clientId: string): OAuthClientRegistration {
     const client = this.clients.get(this.clientKey(provider, clientId));
     if (!client) {
@@ -603,6 +652,8 @@ export class EmailConnectConnectPlane {
     return client;
   }
 
+  // Public-client style registrations omit a secret; confidential clients must
+  // match the registered secret exactly.
   private assertClientSecret(client: OAuthClientRegistration, candidate: string | null | undefined): void {
     if (!client.clientSecret) return;
     if (cleanString(candidate) !== client.clientSecret) {
@@ -610,6 +661,8 @@ export class EmailConnectConnectPlane {
     }
   }
 
+  // Redirect URI checks intentionally require exact registration matches. Loose
+  // redirect matching is an app bug this harness should expose, not hide.
   private assertRedirectUriAllowed(client: OAuthClientRegistration, redirectUri: string): void {
     const normalized = String(redirectUri || '').trim();
     if (!normalized || !client.redirectUris.includes(normalized)) {
@@ -617,6 +670,8 @@ export class EmailConnectConnectPlane {
     }
   }
 
+  // Pending-request validation is shared by approve and deny so stale or reused
+  // consent requests fail before they can produce callback redirects.
   private requirePendingRequest(requestId: string): AuthorizationRequestSnapshot {
     const request = this.requests.get(requestId);
     if (!request) {
@@ -631,6 +686,8 @@ export class EmailConnectConnectPlane {
     return request;
   }
 
+  // Mailbox resolution models provider account pickers: explicit selection
+  // wins, then login_hint, then the single-mailbox shortcut for small tests.
   private resolveMailboxForAuthorization(request: AuthorizationRequestSnapshot, explicitMailboxId: string | null) {
     if (explicitMailboxId) {
       const mailbox = this.engine.requireMailbox(explicitMailboxId);
@@ -675,6 +732,8 @@ export class EmailConnectConnectPlane {
     );
   }
 
+  // Token failure injection lives here because failures at `/token` should be
+  // independent from mail-plane operation failures.
   private maybeThrowTokenFailure(
     mailboxId: string,
     operation: string,
@@ -698,6 +757,8 @@ export class EmailConnectConnectPlane {
     throw new UnauthorizedError('Invalid grant');
   }
 
+  // Keep the reverse refresh-token lookup in sync with the single active grant
+  // model, including rotation and revocation.
   private syncRefreshToken(mailboxId: string, refreshToken: string | null): void {
     for (const [token, ownerMailboxId] of this.refreshTokenToMailboxId.entries()) {
       if (ownerMailboxId === mailboxId) this.refreshTokenToMailboxId.delete(token);
@@ -707,6 +768,8 @@ export class EmailConnectConnectPlane {
     }
   }
 
+  // Access tokens are resolved through the engine map, then checked against the
+  // current mailbox grant to reject stale superseded tokens.
   private findMailboxByCurrentToken(provider: ProviderKind, token: string) {
     try {
       const mailbox = this.engine.resolveMailboxByAccessToken(provider, token);
@@ -717,6 +780,8 @@ export class EmailConnectConnectPlane {
     }
   }
 
+  // Refresh tokens use a separate reverse index because they are not accepted
+  // by provider mail APIs but must work at token endpoints.
   private findMailboxByRefreshToken(provider: ProviderKind, refreshToken: string) {
     const mailboxId = this.refreshTokenToMailboxId.get(refreshToken);
     if (!mailboxId) return null;
@@ -726,10 +791,14 @@ export class EmailConnectConnectPlane {
     return mailbox;
   }
 
+  // Provider-qualified keys are enough for now; there is no dynamic tenant
+  // registry inside the mock auth server.
   private clientKey(provider: ProviderKind, clientId: string): string {
     return `${provider}:${clientId}`;
   }
 
+  // Clone helpers enforce the rule that public/control-plane reads are not
+  // mutable references into the connect state machine.
   private cloneClient(client: OAuthClientRegistration): OAuthClientRegistration {
     return {
       ...client,
@@ -737,6 +806,8 @@ export class EmailConnectConnectPlane {
     };
   }
 
+  // Authorization-request clones preserve caller-visible scope arrays without
+  // exposing mutable state-machine internals.
   private cloneRequest(request: AuthorizationRequestSnapshot): AuthorizationRequestSnapshot {
     return {
       ...request,

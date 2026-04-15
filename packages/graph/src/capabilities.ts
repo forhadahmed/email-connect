@@ -9,12 +9,16 @@ export const GRAPH_READ_SCOPES = [
   'https://graph.microsoft.com/Mail.Read',
   'https://graph.microsoft.com/User.Read',
 ] as const;
+// Send defaults include read/write/send because realistic Graph mailbox
+// workflows often create drafts, upload attachments, then send.
 export const GRAPH_SEND_SCOPES = [
   ...GRAPH_READ_SCOPES,
   'https://graph.microsoft.com/Mail.ReadWrite',
   'https://graph.microsoft.com/Mail.Send',
 ] as const;
 
+// Keep consent bundles stable and duplicate-free so token payloads remain easy
+// to assert in tests.
 function uniqueScopes(scopes: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -29,14 +33,20 @@ function uniqueScopes(scopes: readonly string[]): string[] {
   return out;
 }
 
+// Graph examples may pass scopes with different casing; operation checks should
+// be insensitive to that fixture detail.
 function scopeSet(scopes: string[] | readonly string[] | null | undefined): Set<string> {
   return new Set(uniqueScopes(scopes || []).map((scope) => scope.toLowerCase()));
 }
 
+// Most Graph operations are permitted by any one of a small set of delegated
+// scopes, so the policy table below uses this shared primitive.
 function hasAnyScope(granted: Set<string>, expected: readonly string[]): boolean {
   return expected.some((scope) => granted.has(scope.toLowerCase()));
 }
 
+// Default Graph consent bundles target mailbox-connect testing, not every
+// possible Microsoft identity-platform use case.
 export function defaultGraphScopesForCapabilityMode(capabilityMode: ConnectCapabilityMode = 'send'): string[] {
   return capabilityMode === 'read' ? [...GRAPH_READ_SCOPES] : [...GRAPH_SEND_SCOPES];
 }
