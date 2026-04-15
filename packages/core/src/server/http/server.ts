@@ -21,6 +21,8 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
+// Request parsing is centralized here so provider route handlers can stay
+// focused on semantics instead of reimplementing body decoding and headers.
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readBody(req);
   if (!raw.length) return {};
@@ -127,6 +129,9 @@ function providerDisplayName(provider: ProviderKind): string {
   return provider;
 }
 
+// The interactive consent page is intentionally minimal HTML. Its job is to
+// make provider-connect flows debuggable in a browser, not to become a second
+// product UI layer.
 function consentPageHtml(params: {
   provider: ProviderKind;
   request: AuthorizationRequestSnapshot;
@@ -255,6 +260,8 @@ export class EmailConnectHttpServer {
     const url = new URL(String(req.url || '/'), this.baseUrl || 'http://127.0.0.1');
     const pathname = url.pathname;
 
+    // Control-plane routes live under `__email-connect`; provider routes are
+    // delegated below. That split keeps the public provider facades clean.
     if (method === 'POST' && pathname === '/__email-connect/consent') {
       await this.handleConsentAction(req, res);
       return;

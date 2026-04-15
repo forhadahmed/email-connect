@@ -32,6 +32,8 @@ type AuthorizationCodeRecord = {
   includeIdToken: boolean;
 };
 
+// The connect plane keeps a compact, provider-neutral code record so provider
+// packages can specialize endpoints and scopes without forking token lifecycle.
 function cleanString(value: string | null | undefined): string | null {
   if (value == null) return null;
   const normalized = String(value).trim();
@@ -189,6 +191,8 @@ export class EmailConnectConnectPlane {
   }
 
   createAuthorizationRequest(input: AuthorizationRequestInput): AuthorizationRequestSnapshot {
+    // Request creation is deliberately strict because later approval/token
+    // stages assume redirect URI and PKCE invariants have already been locked in.
     const client = this.requireClient(input.provider, input.clientId);
     const provider = this.engine.requireProvider(input.provider);
     this.assertRedirectUriAllowed(client, input.redirectUri);
@@ -321,6 +325,9 @@ export class EmailConnectConnectPlane {
     code: string;
     codeVerifier?: string | null;
   }): OAuthTokenGrant {
+    // Code exchange performs the provider-neutral invariants first: client
+    // ownership, redirect URI match, expiry, and PKCE verification. Provider
+    // packages only shape endpoints and token payload flavor around this.
     const client = this.requireClient(params.provider, params.clientId);
     this.assertClientSecret(client, params.clientSecret);
     this.assertRedirectUriAllowed(client, params.redirectUri);
@@ -367,6 +374,8 @@ export class EmailConnectConnectPlane {
     refreshToken: string;
     scopes?: string[];
   }): OAuthTokenGrant {
+    // Refresh keeps a single live refresh token lineage per mailbox grant. That
+    // matches how most consumers model a connected mailbox row today.
     const client = this.requireClient(params.provider, params.clientId);
     this.assertClientSecret(client, params.clientSecret);
     const mailboxId = this.refreshTokenToMailboxId.get(params.refreshToken);
@@ -449,6 +458,8 @@ export class EmailConnectConnectPlane {
   }
 
   authorizeMailboxAccess(provider: ProviderKind, accessToken: string, operation: string) {
+    // Provider services call through this gate instead of inspecting scopes or
+    // expiry directly, which keeps HTTP and white-box authorization consistent.
     const mailbox = this.findMailboxByCurrentToken(provider, accessToken);
     if (!mailbox) {
       throw new UnauthorizedError('Unknown mailbox access token');
@@ -488,6 +499,9 @@ export class EmailConnectConnectPlane {
       prompt: string | null;
     },
   ): OAuthTokenGrant {
+    // Token issuance rewrites the mailbox's active grant in place. That keeps
+    // the engine aligned with products that treat a mailbox connection as one
+    // current delegated grant rather than a bag of historical credentials.
     const mailbox = this.engine.requireMailbox(mailboxId);
     const provider = this.engine.requireProvider(mailbox.provider);
     const now = this.engine.nowIso();

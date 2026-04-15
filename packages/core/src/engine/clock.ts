@@ -1,3 +1,7 @@
+/**
+ * A deterministic clock keeps generated ids, token expiry, delta cursors, and
+ * scenario timelines reproducible across white-box and black-box test runs.
+ */
 export class DeterministicClock {
   private currentMs: number;
 

@@ -75,6 +75,11 @@ export type GmailClient = {
   };
 };
 
+/**
+ * The white-box Gmail client mirrors the official nested client shape so
+ * downstream tests can switch between mock and real client code with minimal
+ * ceremony.
+ */
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
@@ -150,6 +155,10 @@ export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: 
   };
 }
 
+/**
+ * Helpers below are opinionated convenience flows on top of the client-shaped
+ * API. They model the common Gmail testing tasks consumers keep repeating.
+ */
 export async function downloadGmailAttachment(params: {
   engine: EmailConnectEngine;
   mailboxId: string;

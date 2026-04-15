@@ -36,6 +36,9 @@ export type RawEmailRenderInput = {
   attachments?: RawEmailAttachmentPart[];
 };
 
+// MIME parsing here is intentionally practical rather than exhaustive. The
+// goal is to support the raw-message seams that provider mocks expose, not to
+// become a full general-purpose email parser.
 function extractBoundary(contentType: string | undefined): string | null {
   if (!contentType) return null;
   const match = contentType.match(/boundary="?([^";]+)"?/i);
@@ -85,6 +88,8 @@ function parseMultipartBody(
   body: string,
   boundary: string,
 ): { bodyText: string; bodyHtml: string | null; attachments: RawEmailAttachmentPart[] } {
+  // Multipart parsing preserves the pieces provider mocks actually surface:
+  // plain text, HTML, file attachments, and inline content ids.
   const marker = `--${boundary}`;
   const segments = body
     .split(marker)

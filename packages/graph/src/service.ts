@@ -99,6 +99,9 @@ function bodyContentPreference(value: string | null | undefined): 'text' | 'html
 }
 
 function parsePreferBodyContentType(headerValue: string | null | undefined): 'text' | 'html' | null {
+  // Graph uses `Prefer: outlook.body-content-type="..."` to negotiate the
+  // body payload shape. Parse it once here so HTTP routes and white-box helpers
+  // stay aligned on the same rule.
   if (!headerValue) return null;
   const match = String(headerValue).match(/outlook\.body-content-type\s*=\s*"?(text|html)"?/i);
   return match?.[1] ? bodyContentPreference(match[1]) : null;
@@ -172,6 +175,9 @@ function graphAttachmentResource(
   attachment: MailboxAttachment,
   options?: { inlineContent?: boolean | undefined; bodyContentType?: 'text' | 'html' | undefined },
 ) {
+  // Convert core attachments into the richer Graph attachment families at the
+  // edge. That keeps core storage provider-neutral while Graph callers still
+  // see `fileAttachment`, `itemAttachment`, or `referenceAttachment`.
   const preference = options?.bodyContentType || 'html';
   const base = {
     '@odata.type': attachmentTypeName(attachment),
@@ -348,6 +354,9 @@ function messageToResource(
   message: MailboxMessage,
   options: GraphBodyOptions & { parentFolderId: string },
 ) {
+  // Keep the Graph message projection centralized so list/get/delta/move/copy
+  // all return the same resource shape, including body preference handling and
+  // folder placement.
   const preference = options.bodyContentType || 'html';
   const body = graphBodyValue(message.bodyText, message.bodyHtml, preference);
   return {
@@ -400,6 +409,9 @@ function draftToResource(draft: MailboxDraft, options?: GraphBodyOptions) {
 }
 
 function resolveContainer(engine: EmailConnectEngine, mailbox: MailboxRecord, providerMessageId: string): GraphContainer {
+  // Graph routes address drafts and messages through overlapping path shapes.
+  // Resolve that overlap in one place so message, MIME, attachment, and send
+  // operations all agree on what a provider id refers to.
   const draft = engine.getDraft(mailbox.id, providerMessageId);
   if (draft) {
     return {
@@ -452,6 +464,9 @@ function draftPatchFromBody(body: Record<string, unknown>): {
 }
 
 function graphAttachmentSeed(entry: unknown): AttachmentSeed | null {
+  // Normalize Graph request payloads into provider-neutral attachment seeds so
+  // white-box seeding and black-box HTTP mutation share the same downstream
+  // storage path.
   if (!entry || typeof entry !== 'object') return null;
   const body = entry as Record<string, unknown>;
   const type = String(body['@odata.type'] || body.attachmentType || '').toLowerCase();
@@ -510,6 +525,9 @@ function parseSendMailRequest(body: Record<string, unknown>): {
     attachments: AttachmentSeed[];
   };
 } {
+  // `/me/sendMail` accepts a nested Graph message resource rather than the core
+  // seed format. Parse it here so JSON send and MIME send converge on the same
+  // canonical send behavior.
   const message = body.message && typeof body.message === 'object' ? (body.message as Record<string, unknown>) : body;
   return {
     saveToSentItems: body.saveToSentItems == null ? true : Boolean(body.saveToSentItems),
@@ -560,6 +578,9 @@ function mailboxAttachmentToSeed(attachment: MailboxAttachment): AttachmentSeed 
 }
 
 export class GraphService {
+  // GraphService owns Microsoft-specific mail-plane semantics. Core stores the
+  // canonical mailbox state; this layer projects it into Graph resources,
+  // delta feeds, folder movement, MIME views, and upload-session behavior.
   constructor(private readonly engine: EmailConnectEngine) {}
 
   async getMe(mailboxId: string) {
@@ -781,6 +802,9 @@ export class GraphService {
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.message.value');
     const container = resolveContainer(this.engine, mailbox, providerMessageId);
+    // `$value` is Graph's raw MIME view. Re-render from canonical state instead
+    // of storing serialized MIME blobs so later mutations and seeds keep a
+    // single source of truth.
     const mime = container.kind === 'draft'
       ? renderRawEmail({
           to: container.draft.to,
@@ -931,6 +955,8 @@ export class GraphService {
     if (!draft) {
       throw new NotFoundError(`Draft not found: ${providerDraftId}`);
     }
+    // Record the send in core before materializing the sent-item row so outbound
+    // observability stays consistent across draft-send and direct-send flows.
     this.engine.sendDraft(mailboxId, providerDraftId, 'graph', providerDraftId);
     const sentMessage = this.engine.appendMessage(mailboxId, {
       providerMessageId: providerDraftId,
@@ -1129,6 +1155,9 @@ export class GraphService {
     const start = Number(match[1]);
     const end = Number(match[2]);
     const total = Number(match[3]);
+    // Upload sessions are ordered and stateful. Reject out-of-order or malformed
+    // chunks so callers can exercise the same resume/retry logic they need in
+    // production Graph integrations.
     if (total !== session.size || start !== session.nextExpectedStart || end < start || end + 1 - start !== bytes.byteLength) {
       throw new ConflictError('Graph upload chunk did not match next expected range');
     }
@@ -1180,6 +1209,9 @@ export class GraphService {
   }
 
   private parseMimeSendBody(body: string | Uint8Array | Buffer) {
+    // Graph clients sometimes send RFC822 payloads instead of JSON message
+    // objects. Normalize that path here so both entrypoints share the same send
+    // pipeline after parsing.
     const raw = typeof body === 'string' ? body : Buffer.from(body).toString('utf8');
     const parsed = parseRawEmailBase64(raw.trim());
     return {
@@ -1207,6 +1239,9 @@ export class GraphService {
     message: MailboxMessage | undefined,
     bodyContentType?: 'text' | 'html',
   ) {
+    // Delta should describe the inbox projection, not the whole mailbox. Once a
+    // message moves out of inbox, folder events communicate that removal and we
+    // stop returning the full resource from the inbox delta stream.
     if (change.kind === 'message_deleted') {
       return {
         id: change.providerMessageId,

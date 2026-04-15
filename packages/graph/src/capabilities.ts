@@ -1,5 +1,9 @@
 import type { ConnectCapabilityMode } from '@email-connect/core';
 
+/**
+ * Graph delegated-mail scopes are grouped by capability mode so connect flows
+ * and operation checks can share one canonical scope policy.
+ */
 export const GRAPH_READ_SCOPES = [
   'offline_access',
   'https://graph.microsoft.com/Mail.Read',
@@ -37,6 +41,10 @@ export function defaultGraphScopesForCapabilityMode(capabilityMode: ConnectCapab
   return capabilityMode === 'read' ? [...GRAPH_READ_SCOPES] : [...GRAPH_SEND_SCOPES];
 }
 
+/**
+ * Operation authorization mirrors what a downstream client feels: can this
+ * token read mail, mutate drafts, or send mail?
+ */
 export function isGraphOperationAuthorized(scopes: string[], operation: string): boolean {
   const granted = scopeSet(scopes);
   const normalized = operation.trim().toLowerCase();

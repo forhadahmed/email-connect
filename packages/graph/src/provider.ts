@@ -11,6 +11,10 @@ function graphUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   };
 }
 
+/**
+ * Graph provider wiring owns Microsoft-specific endpoint locations, delegated
+ * scope behavior, and the HTTP routes mounted on top of the shared engine.
+ */
 export const graphProvider: EmailConnectProvider = {
   id: 'graph',
   connect: {
@@ -60,6 +64,8 @@ export const graphProvider: EmailConnectProvider = {
       const facadeBaseUrl = url.origin;
 
       const authorizeMatch = context.matchPath(pathname, /^\/([^/]+)\/oauth2\/v2\.0\/authorize$/);
+      // The authorize/token endpoints stay tenant-shaped because many products
+      // carry those URLs directly in configuration.
       if (method === 'GET' && authorizeMatch?.[1]) {
         const responseType = String(url.searchParams.get('response_type') || 'code').trim().toLowerCase();
         if (responseType !== 'code') {
@@ -133,6 +139,8 @@ export const graphProvider: EmailConnectProvider = {
 
       if (!accessToken) return false;
 
+      // The Graph facade preserves the split real clients see in production:
+      // `/me`, collections, delta, attachments, compose/send, and uploads.
       const bodyContentType = parsePreferBodyContentType(
         typeof context.req.headers.prefer === 'string' ? context.req.headers.prefer : null,
       );

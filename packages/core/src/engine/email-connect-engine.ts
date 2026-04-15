@@ -56,6 +56,8 @@ function normalizeReceivedAt(value: string | Date | null | undefined, fallbackIs
 }
 
 function normalizeBackendConfig(input: Partial<MailboxBackendConfig> | undefined): MailboxBackendConfig {
+  // Backend config is normalized once at the engine seam so provider services
+  // can treat missing knobs as already-defaulted state.
   return {
     ...(input?.latencyMs != null ? { latencyMs: input.latencyMs } : {}),
     ...(input?.historyResetBeforeRowId != null ? { historyResetBeforeRowId: input.historyResetBeforeRowId } : {}),
@@ -261,6 +263,11 @@ export class EmailConnectEngine {
     return provider;
   }
 
+  /**
+   * Mailbox creation is the canonical seeding seam. Everything else in the
+   * product assumes a mailbox record already exists and points back here for
+   * normalized auth state, failure budgets, and preloaded mail.
+   */
   createMailbox(input: CreateMailboxInput): CreateMailboxResult {
     this.requireProvider(input.provider);
     const mailboxId = cleanString(input.id) || `mailbox-${this.nextMailboxSeq++}`;
@@ -356,6 +363,11 @@ export class EmailConnectEngine {
     };
   }
 
+  /**
+   * Provider HTTP facades resolve bearer tokens through this mapping. The extra
+   * provider check prevents a token minted for one facade from being reused
+   * against another by accident.
+   */
   resolveMailboxByAccessToken(provider: string, accessToken: string): MailboxRecord {
     const mailboxId = this.accessTokenToMailboxId.get(accessToken);
     if (!mailboxId) {
@@ -391,6 +403,10 @@ export class EmailConnectEngine {
     return this.snapshotMailbox(identifier);
   }
 
+  /**
+   * Messages are immutable enough to act as the primary mailbox history record,
+   * while change rows carry replay, deletion, and label churn on top.
+   */
   appendMessage(identifier: string, seed: MessageSeed): MailboxMessage {
     const mailbox = this.requireMailbox(identifier);
     const providerMessageId = cleanString(seed.providerMessageId) || this.generateId(`${mailbox.provider}-msg`);
@@ -495,6 +511,9 @@ export class EmailConnectEngine {
     return cloneAttachment(attachment);
   }
 
+  // Draft attachments are modeled directly in core so provider services can
+  // share one compose substrate instead of inventing provider-specific draft
+  // storage for uploads and inline files.
   addDraftAttachment(identifier: string, providerDraftId: string, seed: AttachmentSeed): MailboxAttachment {
     const mailbox = this.requireMailbox(identifier);
     const draft = mailbox.drafts.find((entry) => entry.providerDraftId === providerDraftId);
@@ -563,6 +582,11 @@ export class EmailConnectEngine {
     return true;
   }
 
+  /**
+   * Sending a draft records the intent in outbox but does not automatically
+   * materialize a sent-item row. Provider services may layer that behavior on
+   * top because Gmail and Graph differ here.
+   */
   sendDraft(
     identifier: string,
     providerDraftId: string,
@@ -641,6 +665,9 @@ export class EmailConnectEngine {
   }
 
   maybeThrowInjectedFailure(mailbox: MailboxRecord, operation: string): void {
+    // Failure injection is consumed by provider services right before the
+    // simulated provider call would have happened, which keeps retries and
+    // sequencing realistic from the consumer's point of view.
     const authOps = mailbox.backend.authFailureOperations || [];
     if (
       mailbox.backend.authFailureMode &&
@@ -686,6 +713,8 @@ export class EmailConnectEngine {
   }
 
   private materializeAttachment(seed: AttachmentSeed): MailboxAttachment {
+    // Materialization is where loose fixture input becomes a fully normalized
+    // attachment record that every provider surface can trust.
     const bytes = bytesFromUnknown(seed.contentBytes);
     return {
       providerAttachmentId: cleanString(seed.providerAttachmentId) || this.generateId('att'),
@@ -729,6 +758,8 @@ export class EmailConnectEngine {
       removedLabels?: string[];
     },
   ): void {
+    // Change rows are append-only so provider cursors can be derived later
+    // without mutating historical sequencing.
     mailbox.changes.push({
       rowId: this.nextChangeRowId++,
       kind: change.kind,

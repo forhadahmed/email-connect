@@ -4,6 +4,11 @@ import { SeededRandom } from '../utils/rng.js';
 
 export type MailboxEmailProfile = 'quiet' | 'steady' | 'busy' | 'bursty';
 
+/**
+ * Template sources describe message content, while the generation plan
+ * describes tempo and conversation shape. Keeping those concerns separate makes
+ * it easy to reuse one corpus across many workload patterns.
+ */
 export type GeneratedTemplate = Omit<
   MessageSeed,
   'providerMessageId' | 'providerThreadId' | 'messageId' | 'inReplyTo' | 'references' | 'receivedAt'
@@ -113,6 +118,9 @@ function buildTimeline(params: {
   profile: MailboxEmailProfile;
   random: SeededRandom;
 }): string[] {
+  // Timeline generation is intentionally profile-based rather than purely
+  // random. Consumers usually want "quiet but jittery" or "bursty after hours"
+  // behavior, not just an arbitrary scatter of timestamps.
   if (params.count <= 0) return [];
   const startMs = params.startAt.getTime();
   const endMs = Math.max(startMs + 1, params.endAt.getTime());

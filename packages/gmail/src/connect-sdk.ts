@@ -9,6 +9,9 @@ import {
   revokeAuthorizationToken,
 } from '@email-connect/core';
 
+// Keep the provider-specific connect SDK deliberately thin. These helpers give
+// consumers Gmail-named entrypoints while the canonical OAuth state machine
+// still lives in core.
 export function registerGmailOAuthClient(
   engine: EmailConnectEngine,
   input: Omit<OAuthClientInput, 'provider'>,

@@ -1,5 +1,9 @@
 import type { ConnectCapabilityMode } from '@email-connect/core';
 
+/**
+ * Gmail scopes are grouped by the capability modes consumers actually reason
+ * about: read-only mailbox access versus compose/send-capable access.
+ */
 export const GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
 export const GMAIL_READ_SCOPES = [
   ...GOOGLE_IDENTITY_SCOPES,
@@ -41,6 +45,10 @@ export function defaultGmailScopesForCapabilityMode(capabilityMode: ConnectCapab
   return capabilityMode === 'read' ? [...GMAIL_READ_SCOPES] : [...GMAIL_SEND_SCOPES];
 }
 
+/**
+ * Authorization checks are operation-oriented instead of route-oriented so the
+ * same policy applies to SDK flows and HTTP facade calls.
+ */
 export function isGmailOperationAuthorized(scopes: string[], operation: string): boolean {
   const granted = scopeSet(scopes);
   const normalized = operation.trim().toLowerCase();

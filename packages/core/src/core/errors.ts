@@ -1,3 +1,7 @@
+/**
+ * Core errors deliberately map to HTTP semantics because the same engine powers
+ * both the embeddable SDK and the black-box HTTP server.
+ */
 export class EmailConnectError extends Error {
   readonly statusCode: number;
 

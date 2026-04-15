@@ -26,6 +26,10 @@ function gmailUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   };
 }
 
+/**
+ * Gmail provider wiring keeps Gmail-only details out of core: endpoint shapes,
+ * incremental-consent behavior, and the HTTP route surface.
+ */
 export const gmailProvider: EmailConnectProvider = {
   id: 'gmail',
   connect: {
@@ -70,6 +74,8 @@ export const gmailProvider: EmailConnectProvider = {
       const pathname = url.pathname;
       const service = new GmailService(context.engine);
 
+      // OAuth and OIDC-style routes are exposed in provider-native locations so
+      // black-box consumers can point real integrations at the mock.
       if (method === 'GET' && pathname === '/o/oauth2/v2/auth') {
         const responseType = String(url.searchParams.get('response_type') || 'code').trim().toLowerCase();
         if (responseType !== 'code') {
@@ -142,6 +148,8 @@ export const gmailProvider: EmailConnectProvider = {
       const accessToken = pathname.startsWith('/gmail/v1/') ? context.parseBearerToken() : null;
       if (!accessToken) return false;
 
+      // Gmail facade routes mirror the official REST hierarchy: profile/labels,
+      // message resources, thread resources, history, compose, and watch.
       if (method === 'GET' && pathname === '/gmail/v1/users/me/profile') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.profile.get');
         context.sendJson(200, (await service.getProfile(mailbox.id)).data);

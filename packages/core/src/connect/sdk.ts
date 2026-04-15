@@ -7,6 +7,11 @@ import type {
 } from '../core/types.js';
 import { EmailConnectEngine } from '../engine/email-connect-engine.js';
 
+/**
+ * The white-box connect SDK mirrors the wire-level authorization URL shape so
+ * consumers can switch between SDK mode and HTTP mode without changing their
+ * mental model of the provider flow.
+ */
 function buildAuthorizationUrl(params: {
   authorizeUrl: string;
   provider: ProviderKind;
@@ -42,6 +47,10 @@ function buildAuthorizationUrl(params: {
   return url.toString();
 }
 
+/**
+ * These wrappers intentionally stay thin. The canonical behavior lives in the
+ * connect plane; the SDK simply gives tests ergonomic, typed entry points.
+ */
 export function registerOAuthClient(engine: EmailConnectEngine, input: OAuthClientInput) {
   return engine.connect.registerClient(input);
 }

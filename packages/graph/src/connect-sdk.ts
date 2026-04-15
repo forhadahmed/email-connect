@@ -8,6 +8,9 @@ import {
   registerOAuthClient,
 } from '@email-connect/core';
 
+// Keep the provider-specific connect SDK deliberately thin. These wrappers
+// expose Microsoft-shaped entrypoints without re-implementing the canonical
+// OAuth lifecycle outside core.
 export function registerGraphOAuthClient(
   engine: EmailConnectEngine,
   input: Omit<OAuthClientInput, 'provider'>,

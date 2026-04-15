@@ -14,6 +14,10 @@ export type OutlookGraphClientLike = {
   api(path: string): GraphRequestLike;
 };
 
+/**
+ * The white-box Graph client keeps the familiar `.api(...).get/post/patch`
+ * shape so provider-specific test code can stay close to Microsoft client code.
+ */
 export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mailboxId: string): { client: OutlookGraphClientLike } {
   const service = new GraphService(engine);
   const normalizePath = (path: string): string => {
@@ -202,6 +206,11 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
   };
 }
 
+/**
+ * Convenience helpers build on top of the client-shaped API for the flows
+ * downstream systems tend to repeat: attachment download, reply drafting, and
+ * direct draft creation.
+ */
 export async function downloadOutlookAttachment(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
