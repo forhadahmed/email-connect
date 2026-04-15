@@ -34,28 +34,59 @@ async function readFormBody(req: IncomingMessage): Promise<Record<string, string
   return Object.fromEntries(params.entries());
 }
 
-function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
+function applyHeaders(res: ServerResponse, headers: Record<string, string> | undefined): void {
+  for (const [name, value] of Object.entries(headers || {})) {
+    if (!String(name || '').trim()) continue;
+    res.setHeader(name, value);
+  }
+}
+
+function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  body: unknown,
+  options?: { headers?: Record<string, string> },
+): void {
   const payload = JSON.stringify(body, null, 2);
   res.statusCode = statusCode;
   res.setHeader('content-type', 'application/json; charset=utf-8');
+  applyHeaders(res, options?.headers);
   res.end(payload);
 }
 
-function sendHtml(res: ServerResponse, statusCode: number, body: string): void {
+function sendHtml(
+  res: ServerResponse,
+  statusCode: number,
+  body: string,
+  options?: { headers?: Record<string, string> },
+): void {
   res.statusCode = statusCode;
   res.setHeader('content-type', 'text/html; charset=utf-8');
+  applyHeaders(res, options?.headers);
   res.end(body);
 }
 
-function sendText(res: ServerResponse, statusCode: number, body = ''): void {
+function sendText(
+  res: ServerResponse,
+  statusCode: number,
+  body = '',
+  options?: { headers?: Record<string, string> },
+): void {
   res.statusCode = statusCode;
   res.setHeader('content-type', 'text/plain; charset=utf-8');
+  applyHeaders(res, options?.headers);
   res.end(body);
 }
 
-function sendBytes(res: ServerResponse, statusCode: number, bytes: Uint8Array): void {
+function sendBytes(
+  res: ServerResponse,
+  statusCode: number,
+  bytes: Uint8Array,
+  options?: { headers?: Record<string, string>; contentType?: string },
+): void {
   res.statusCode = statusCode;
-  res.setHeader('content-type', 'application/octet-stream');
+  res.setHeader('content-type', options?.contentType || 'application/octet-stream');
+  applyHeaders(res, options?.headers);
   res.end(Buffer.from(bytes));
 }
 
@@ -243,10 +274,11 @@ export class EmailConnectHttpServer {
       res,
       readJsonBody: () => readJsonBody(req),
       readFormBody: () => readFormBody(req),
-      sendJson: (statusCode, body) => sendJson(res, statusCode, body),
-      sendHtml: (statusCode, body) => sendHtml(res, statusCode, body),
-      sendText: (statusCode, body = '') => sendText(res, statusCode, body),
-      sendBytes: (statusCode, bytes) => sendBytes(res, statusCode, bytes),
+      readRawBody: () => readBody(req),
+      sendJson: (statusCode, body, options) => sendJson(res, statusCode, body, options),
+      sendHtml: (statusCode, body, options) => sendHtml(res, statusCode, body, options),
+      sendText: (statusCode, body = '', options) => sendText(res, statusCode, body, options),
+      sendBytes: (statusCode, bytes, options) => sendBytes(res, statusCode, bytes, options),
       parseBearerToken: () => parseBearerToken(req),
       matchPath,
       splitScopes,

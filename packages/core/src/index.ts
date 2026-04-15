@@ -17,6 +17,6 @@ export {
 } from './connect/sdk.js';
 export { EmailConnectError, ConflictError, NotFoundError, UnauthorizedError } from './core/errors.js';
 export { encodeBase64Url, encodeBytesBase64, encodeBytesBase64Url, decodeBase64ToBytes, decodeBase64UrlToBytes, bytesFromUnknown } from './utils/base64.js';
-export { parseRawEmailBase64Url, normalizeAddressInput } from './utils/raw-email.js';
+export { parseRawEmailBase64, parseRawEmailBase64Url, renderRawEmail, normalizeAddressInput } from './utils/raw-email.js';
 export type * from './core/types.js';
 export type * from './provider.js';

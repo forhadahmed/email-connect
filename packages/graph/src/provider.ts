@@ -1,6 +1,6 @@
 import { EmailConnectError, type EmailConnectProvider, type MailboxRecord } from '@email-connect/core';
 import { defaultGraphScopesForCapabilityMode, isGraphOperationAuthorized } from './capabilities.js';
-import { GraphService } from './service.js';
+import { GraphService, parsePreferBodyContentType } from './service.js';
 
 function graphUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   return {
@@ -118,7 +118,31 @@ export const graphProvider: EmailConnectProvider = {
       }
 
       const accessToken = pathname.startsWith('/graph/v1.0/') ? context.parseBearerToken() : null;
+
+      if (method === 'PUT' && pathname.startsWith('/__email-connect/upload/graph/')) {
+        const outcome = await service.uploadAttachmentChunk(
+          `${pathname}${url.search}`,
+          await context.readRawBody(),
+          Object.fromEntries(
+            Object.entries(context.req.headers).map(([name, value]) => [name.toLowerCase(), value]),
+          ),
+        );
+        context.sendJson(outcome.statusCode, outcome.body);
+        return true;
+      }
+
       if (!accessToken) return false;
+
+      const bodyContentType = parsePreferBodyContentType(
+        typeof context.req.headers.prefer === 'string' ? context.req.headers.prefer : null,
+      );
+      const preferenceHeaders = bodyContentType
+        ? {
+            headers: {
+              'Preference-Applied': `outlook.body-content-type="${bodyContentType}"`,
+            },
+          }
+        : undefined;
 
       if (method === 'GET' && pathname === '/graph/v1.0/me') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.me.get');
@@ -128,26 +152,53 @@ export const graphProvider: EmailConnectProvider = {
 
       if (method === 'GET' && pathname === '/graph/v1.0/me/messages') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.messages.list');
-        context.sendJson(200, await service.listMessages(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl));
+        context.sendJson(
+          200,
+          await service.listMessages(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl, { bodyContentType: bodyContentType || undefined }),
+          preferenceHeaders,
+        );
         return true;
       }
 
       if (method === 'GET' && pathname === '/graph/v1.0/me/mailFolders/inbox/messages') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.inbox.messages.list');
-        context.sendJson(200, await service.listInboxMessages(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl));
+        context.sendJson(
+          200,
+          await service.listInboxMessages(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl, { bodyContentType: bodyContentType || undefined }),
+          preferenceHeaders,
+        );
         return true;
       }
 
       if (method === 'GET' && pathname === '/graph/v1.0/me/mailFolders/inbox/messages/delta') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.delta.get');
-        context.sendJson(200, await service.delta(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl));
+        context.sendJson(
+          200,
+          await service.delta(mailbox.id, `${pathname}${url.search}`, facadeBaseUrl, { bodyContentType: bodyContentType || undefined }),
+          preferenceHeaders,
+        );
         return true;
       }
 
       const messageMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)$/);
       if (method === 'GET' && messageMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.get');
-        context.sendJson(200, await service.getMessage(mailbox.id, decodeURIComponent(messageMatch[1])));
+        context.sendJson(
+          200,
+          await service.getMessage(mailbox.id, decodeURIComponent(messageMatch[1]), { bodyContentType: bodyContentType || undefined }),
+          preferenceHeaders,
+        );
+        return true;
+      }
+
+      const messageValueMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/\$value$/);
+      if (method === 'GET' && messageValueMatch?.[1]) {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.value');
+        context.sendBytes(
+          200,
+          await service.getMessageValue(mailbox.id, decodeURIComponent(messageValueMatch[1])),
+          { contentType: 'message/rfc822' },
+        );
         return true;
       }
 
@@ -181,7 +232,28 @@ export const graphProvider: EmailConnectProvider = {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachment.get');
         context.sendJson(
           200,
-          await service.getAttachment(mailbox.id, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2])),
+          await service.getAttachment(mailbox.id, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]), {
+            bodyContentType: bodyContentType || undefined,
+          }),
+          preferenceHeaders,
+        );
+        return true;
+      }
+
+      const uploadSessionMatch = context.matchPath(
+        pathname,
+        /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/attachments\/createUploadSession$/,
+      );
+      if (method === 'POST' && uploadSessionMatch?.[1]) {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.attachment.upload.create');
+        context.sendJson(
+          201,
+          await service.createAttachmentUploadSession(
+            mailbox.id,
+            decodeURIComponent(uploadSessionMatch[1]),
+            await context.readJsonBody(),
+            facadeBaseUrl,
+          ),
         );
         return true;
       }
@@ -195,20 +267,72 @@ export const graphProvider: EmailConnectProvider = {
 
       if (method === 'POST' && pathname === '/graph/v1.0/me/messages') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.draft.create');
-        context.sendJson(200, await service.createDraft(mailbox.id, await context.readJsonBody()));
+        context.sendJson(200, await service.createDraft(mailbox.id, await context.readJsonBody()), preferenceHeaders);
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/graph/v1.0/me/sendMail') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.sendmail.post');
+        const contentType = String(context.req.headers['content-type'] || '').toLowerCase();
+        await service.sendMail(
+          mailbox.id,
+          contentType.includes('application/json')
+            ? await context.readJsonBody()
+            : Buffer.from(await context.readRawBody()).toString('utf8'),
+        );
+        context.sendText(202, '');
         return true;
       }
 
       const sendMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/send$/);
       if (method === 'POST' && sendMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.draft.send');
-        context.sendJson(200, await service.sendDraft(mailbox.id, decodeURIComponent(sendMatch[1])));
+        await service.sendDraft(mailbox.id, decodeURIComponent(sendMatch[1]));
+        context.sendText(202, '');
+        return true;
+      }
+
+      const moveMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/move$/);
+      if (method === 'POST' && moveMatch?.[1]) {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.move');
+        const body = await context.readJsonBody();
+        context.sendJson(
+          201,
+          await service.moveMessage(
+            mailbox.id,
+            decodeURIComponent(moveMatch[1]),
+            String(body.destinationId || '').trim() || 'archive',
+            { bodyContentType: bodyContentType || undefined },
+          ),
+          preferenceHeaders,
+        );
+        return true;
+      }
+
+      const copyMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/copy$/);
+      if (method === 'POST' && copyMatch?.[1]) {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.copy');
+        const body = await context.readJsonBody();
+        context.sendJson(
+          201,
+          await service.copyMessage(
+            mailbox.id,
+            decodeURIComponent(copyMatch[1]),
+            String(body.destinationId || '').trim() || 'archive',
+            { bodyContentType: bodyContentType || undefined },
+          ),
+          preferenceHeaders,
+        );
         return true;
       }
 
       if (method === 'PATCH' && messageMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.draft.update');
-        context.sendJson(200, await service.patchDraft(mailbox.id, decodeURIComponent(messageMatch[1]), await context.readJsonBody()));
+        context.sendJson(
+          200,
+          await service.patchDraft(mailbox.id, decodeURIComponent(messageMatch[1]), await context.readJsonBody()),
+          preferenceHeaders,
+        );
         return true;
       }
 

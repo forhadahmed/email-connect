@@ -1,10 +1,17 @@
 {
   "name": "@email-connect/core",
   "version": "0.1.0",
-  "description": "Core engine, control plane, generation, and generic HTTP host for email-connect.",
+  "description": "Provider-neutral core engine, control plane, generation, and generic HTTP host for email-connect.",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -14,6 +21,25 @@
       "types": "./dist/server/index.d.ts",
       "import": "./dist/server/index.js"
     }
+  },
+  "keywords": [
+    "email",
+    "oauth",
+    "mock",
+    "simulation",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forhad/email-connect.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/forhad/email-connect/issues"
+  },
+  "homepage": "https://github.com/forhad/email-connect/tree/main/packages/core#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

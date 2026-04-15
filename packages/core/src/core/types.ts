@@ -68,7 +68,18 @@ export type MessageAddressLike =
   | null
   | undefined;
 
+export type MailAttachmentType = 'file' | 'item' | 'reference';
+
 export type HeaderMap = Record<string, string>;
+
+export type EmbeddedMessageSeed = {
+  subject?: string | null;
+  from?: string | null;
+  to?: MessageAddressLike;
+  bodyText?: string | null;
+  bodyHtml?: string | null;
+  receivedAt?: string | Date | null;
+};
 
 export type AttachmentSeed = {
   providerAttachmentId?: string;
@@ -76,6 +87,12 @@ export type AttachmentSeed = {
   mimeType: string;
   contentBytes: Uint8Array | ArrayBuffer | Buffer | string;
   sizeBytes?: number | null;
+  attachmentType?: MailAttachmentType;
+  isInline?: boolean;
+  contentId?: string | null;
+  contentLocation?: string | null;
+  sourceUrl?: string | null;
+  embeddedMessage?: EmbeddedMessageSeed | null;
 };
 
 export type MessageSeed = {
@@ -104,6 +121,7 @@ export type DraftSeed = {
   subject?: string | null;
   bodyText?: string;
   bodyHtml?: string | null;
+  attachments?: AttachmentSeed[];
 };
 
 export type MailboxChangeKind = 'message_added' | 'message_replayed' | 'label_changed' | 'message_deleted';
@@ -123,6 +141,19 @@ export type MailboxAttachment = {
   mimeType: string;
   sizeBytes: number | null;
   contentBytes: Uint8Array;
+  attachmentType: MailAttachmentType;
+  isInline: boolean;
+  contentId: string | null;
+  contentLocation: string | null;
+  sourceUrl: string | null;
+  embeddedMessage: {
+    subject: string | null;
+    from: string | null;
+    to: string | null;
+    bodyText: string | null;
+    bodyHtml: string | null;
+    receivedAt: string | null;
+  } | null;
 };
 
 export type MailboxMessage = {
@@ -153,6 +184,7 @@ export type MailboxDraft = {
   subject: string | null;
   bodyText: string;
   bodyHtml: string | null;
+  attachments: MailboxAttachment[];
 };
 
 export type OutboxMessage = {

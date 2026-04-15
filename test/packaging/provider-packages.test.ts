@@ -32,7 +32,9 @@ describe('provider packages', () => {
 
     const gmail = getGmailClientForMailbox(engine, 'gmail-only');
     const listed = await gmail.users.messages.list({ userId: 'me' });
-    expect(listed.data.messages).toEqual([{ id: 'gmail-only-msg-1' }]);
+    expect(listed.data.messages).toEqual([
+      expect.objectContaining({ id: 'gmail-only-msg-1' }),
+    ]);
 
     expect(() =>
       engine.createMailbox({

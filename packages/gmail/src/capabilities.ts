@@ -11,6 +11,9 @@ export const GMAIL_SEND_SCOPES = [
   'https://www.googleapis.com/auth/gmail.compose',
   'https://www.googleapis.com/auth/gmail.send',
 ] as const;
+export const GMAIL_METADATA_SCOPE = 'https://www.googleapis.com/auth/gmail.metadata';
+export const GMAIL_INSERT_SCOPE = 'https://www.googleapis.com/auth/gmail.insert';
+export const GMAIL_FULL_SCOPE = 'https://mail.google.com/';
 
 function uniqueScopes(scopes: readonly string[]): string[] {
   const out: string[] = [];
@@ -44,28 +47,54 @@ export function isGmailOperationAuthorized(scopes: string[], operation: string):
 
   if (normalized === 'gmail.profile.get' || normalized === 'profile.get') {
     return hasAnyScope(granted, [
+      GMAIL_METADATA_SCOPE,
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/gmail.send',
+      GMAIL_FULL_SCOPE,
     ]);
   }
   if (
     normalized === 'gmail.labels.list' ||
     normalized === 'gmail.messages.list' ||
-    normalized === 'gmail.messages.get' ||
+    normalized === 'gmail.messages.get.metadata' ||
     normalized === 'gmail.history.list' ||
+    normalized === 'gmail.threads.list' ||
+    normalized === 'gmail.threads.get.metadata' ||
+    normalized === 'gmail.watch.create' ||
+    normalized === 'gmail.watch.stop'
+  ) {
+    return hasAnyScope(granted, [
+      GMAIL_METADATA_SCOPE,
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
+    ]);
+  }
+  if (normalized === 'gmail.messages.list.search') {
+    return hasAnyScope(granted, [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
+    ]);
+  }
+  if (
+    normalized === 'gmail.messages.get.body' ||
+    normalized === 'gmail.threads.get.body' ||
     normalized === 'gmail.attachments.get'
   ) {
     return hasAnyScope(granted, [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
     ]);
   }
   if (normalized === 'gmail.drafts.create') {
     return hasAnyScope(granted, [
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
     ]);
   }
   if (normalized === 'gmail.drafts.send' || normalized === 'gmail.messages.send') {
@@ -73,6 +102,14 @@ export function isGmailOperationAuthorized(scopes: string[], operation: string):
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
+    ]);
+  }
+  if (normalized === 'gmail.messages.import' || normalized === 'gmail.messages.insert') {
+    return hasAnyScope(granted, [
+      GMAIL_INSERT_SCOPE,
+      'https://www.googleapis.com/auth/gmail.modify',
+      GMAIL_FULL_SCOPE,
     ]);
   }
   return true;

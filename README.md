@@ -48,9 +48,37 @@ You can consume `email-connect` in the simplest shape that matches your product:
 
 That lets a downstream product choose:
 
-- Gmail only: `@email-connect/core` + `@email-connect/gmail`
-- Graph only: `@email-connect/core` + `@email-connect/graph`
-- Both providers: `email-connect` or `@email-connect/core` + both provider packages
+| Need | Install shape |
+| --- | --- |
+| Gmail only | `@email-connect/core` + `@email-connect/gmail` |
+| Graph only | `@email-connect/core` + `@email-connect/graph` |
+| Both providers, shortest path | `email-connect` |
+| Both providers, explicit composition | `@email-connect/core` + both provider packages |
+
+This repository is intentionally structured as a small monorepo around that
+offering:
+
+- `packages/core`
+  - the provider-neutral package that both provider packages depend on
+- `packages/gmail`
+  - the Gmail-only package
+- `packages/graph`
+  - the Graph-only package
+- `src`
+  - the combined convenience wrapper published as `email-connect`
+
+Typical install shapes look like:
+
+```sh
+# Gmail only
+npm install @email-connect/core @email-connect/gmail
+
+# Graph only
+npm install @email-connect/core @email-connect/graph
+
+# Both providers, convenience path
+npm install email-connect
+```
 
 Typical usage looks like:
 
@@ -70,6 +98,30 @@ engine.createMailbox({
 
 const gmail = getGmailClientForMailbox(engine, 'ops');
 ```
+
+The longer-term product roadmap for taking this from the current strong
+foundation to a polished external 10/10 offering lives in [TODO.md](./TODO.md).
+
+The packaging and compatibility rules for the public API live in
+[VERSIONING.md](./VERSIONING.md), and the release checklist for the package
+family lives in [RELEASING.md](./RELEASING.md).
+
+## Combined Package Policy
+
+The root `email-connect` package is intentionally a curated convenience
+offering.
+
+It should expose the high-value combined surface:
+
+- the combined engine/server
+- core generation and scenario helpers
+- the high-value Gmail and Graph helpers that make the convenience package
+  useful on its own
+
+It should not become a catch-all dump of every internal symbol from every
+provider package. If you want the narrowest provider-specific install and
+documentation boundary, prefer `@email-connect/gmail` or
+`@email-connect/graph`.
 
 ## Status
 
@@ -111,9 +163,12 @@ The current mail-plane implementation covers the seams that a consumer like
   - `/me/messages`
   - `/me/mailFolders/inbox/messages`
   - `/me/mailFolders/inbox/messages/delta`
-  - message detail, attachments list/get, attachment `$value`
-  - `createReply`, draft create/patch/send, and draft delete
-  - stale delta tokens, opaque continuation links, inline attachment omission, and HTML draft bodies
+  - message detail, message `$value`, attachments list/get, and attachment `$value`
+  - `Prefer: outlook.body-content-type="text" | "html"`
+  - `createReply`, draft create/patch/send, direct `sendMail`, and draft delete
+  - move/copy and large-attachment upload sessions
+  - typed Graph attachments: file, reference, and item attachments
+  - stale delta tokens, opaque continuation links, inline attachment omission, and HTML-capable compose bodies
 
 ## Generation Model
 
@@ -140,6 +195,9 @@ Generation supports:
 
 That keeps tests close to user intent:
 "simulate a busy inbox with deep threads" instead of "insert 500 rows."
+The examples and workload language are intentionally not limited to one domain,
+so the same engine can model logistics dispatch, insurance intake, or other
+document-heavy operational inboxes.
 
 ## Fault Injection
 
@@ -185,4 +243,5 @@ workspace-relative internals:
 - generation examples show explicit `@email-connect/core` + provider composition
 
 That makes the example set double as packaging documentation for downstream
-consumers.
+consumers. The current set includes both logistics-style operational flows and
+an insurance claim-intake pipeline.

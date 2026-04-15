@@ -7,6 +7,9 @@ import type {
   GmailMessage,
   GmailMessageRef,
   GmailProfile,
+  GmailThread,
+  GmailThreadRef,
+  GmailWatchResponse,
 } from './service.js';
 import { GmailService } from './service.js';
 
@@ -20,14 +23,37 @@ export type GmailClient = {
       list(params: {
         userId: string;
         q?: string;
+        labelIds?: string[];
         maxResults?: number;
         pageToken?: string;
-      }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string }>>;
-      get(params: { userId: string; id: string; format?: string }): Promise<GmailApiResponse<GmailMessage>>;
+      }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }>>;
+      get(params: {
+        userId: string;
+        id: string;
+        format?: string;
+        metadataHeaders?: string[];
+      }): Promise<GmailApiResponse<GmailMessage>>;
+      import(params: { userId: string; requestBody: Record<string, unknown> }): Promise<GmailApiResponse<GmailMessage>>;
+      insert(params: { userId: string; requestBody: Record<string, unknown> }): Promise<GmailApiResponse<GmailMessage>>;
       send(params: { userId: string; requestBody: Record<string, unknown> }): Promise<GmailApiResponse<{ id?: string; threadId?: string }>>;
       attachments: {
         get(params: { userId: string; messageId: string; id: string }): Promise<GmailApiResponse<{ data?: string }>>;
       };
+    };
+    threads: {
+      list(params: {
+        userId: string;
+        q?: string;
+        labelIds?: string[];
+        maxResults?: number;
+        pageToken?: string;
+      }): Promise<GmailApiResponse<{ threads?: GmailThreadRef[]; nextPageToken?: string; resultSizeEstimate?: number }>>;
+      get(params: {
+        userId: string;
+        id: string;
+        format?: string;
+        metadataHeaders?: string[];
+      }): Promise<GmailApiResponse<GmailThread>>;
     };
     history: {
       list(params: {
@@ -44,6 +70,8 @@ export type GmailClient = {
       }): Promise<GmailApiResponse<{ id?: string; message?: { id?: string; threadId?: string } }>>;
       send(params: { userId: string; requestBody: Record<string, unknown> }): Promise<GmailApiResponse<{ id?: string; threadId?: string }>>;
     };
+    watch(params: { userId: string; requestBody: Record<string, unknown> }): Promise<GmailApiResponse<GmailWatchResponse>>;
+    stop(params: { userId: string }): Promise<GmailApiResponse<Record<string, never>>>;
   };
 };
 
@@ -68,7 +96,16 @@ export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: 
           return service.listMessages(mailboxId, params);
         },
         get(params) {
-          return service.getMessage(mailboxId, params.id);
+          return service.getMessage(mailboxId, params.id, {
+            ...(params.format ? { format: params.format } : {}),
+            ...(params.metadataHeaders?.length ? { metadataHeaders: params.metadataHeaders } : {}),
+          });
+        },
+        import(params) {
+          return service.importMessage(mailboxId, params.requestBody, 'import');
+        },
+        insert(params) {
+          return service.importMessage(mailboxId, params.requestBody, 'insert');
         },
         send(params) {
           return service.sendMessage(mailboxId, params.requestBody);
@@ -77,6 +114,17 @@ export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: 
           get(params) {
             return service.getAttachment(mailboxId, params.messageId, params.id);
           },
+        },
+      },
+      threads: {
+        list(params) {
+          return service.listThreads(mailboxId, params);
+        },
+        get(params) {
+          return service.getThread(mailboxId, params.id, {
+            ...(params.format ? { format: params.format } : {}),
+            ...(params.metadataHeaders?.length ? { metadataHeaders: params.metadataHeaders } : {}),
+          });
         },
       },
       history: {
@@ -91,6 +139,12 @@ export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: 
         send(params) {
           return service.sendDraft(mailboxId, params.requestBody);
         },
+      },
+      watch(params) {
+        return service.watchMailbox(mailboxId, params.requestBody);
+      },
+      stop() {
+        return service.stopWatching(mailboxId);
       },
     },
   };

@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
-import { EmailConnectEngine, NotFoundError, encodeBase64Url, encodeBytesBase64Url, parseRawEmailBase64Url } from '@email-connect/core';
-import type { MailboxChange, MailboxMessage } from '@email-connect/core';
+import {
+  EmailConnectEngine,
+  NotFoundError,
+  encodeBase64Url,
+  encodeBytesBase64Url,
+  parseRawEmailBase64Url,
+  renderRawEmail,
+} from '@email-connect/core';
+import type { MailboxChange, MailboxMessage, MailboxRecord } from '@email-connect/core';
 
 export type GmailApiResponse<T> = { data: T };
 
@@ -18,6 +25,13 @@ export type GmailLabel = {
 
 export type GmailMessageRef = {
   id?: string;
+  threadId?: string;
+};
+
+export type GmailThreadRef = {
+  id?: string;
+  historyId?: string;
+  snippet?: string;
 };
 
 export type GmailHistoryRecord = {
@@ -47,7 +61,35 @@ export type GmailMessage = {
   payload?: GmailMessagePayload;
   labelIds?: string[];
   snippet?: string;
+  historyId?: string;
+  internalDate?: string;
+  sizeEstimate?: number;
+  raw?: string;
 };
+
+export type GmailThread = {
+  id?: string;
+  historyId?: string;
+  snippet?: string;
+  messages?: GmailMessage[];
+};
+
+export type GmailWatchResponse = {
+  historyId?: string;
+  expiration?: string;
+};
+
+export type GmailMessageFormat = 'minimal' | 'full' | 'raw' | 'metadata';
+
+type GmailWatchState = {
+  topicName: string;
+  labelIds: string[];
+  labelFilterAction: 'include' | 'exclude';
+  expiration: string;
+  historyId: string;
+};
+
+const gmailRuntimeByEngine = new WeakMap<EmailConnectEngine, Map<string, { watch: GmailWatchState | null }>>();
 
 function parsePageToken(pageToken?: string): number {
   if (!pageToken) return 0;
@@ -63,6 +105,31 @@ function receivedAfterFromQuery(q?: string): string | undefined {
   const seconds = Number.parseInt(value, 10);
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
   return new Date(seconds * 1000).toISOString();
+}
+
+function gmailRuntime(engine: EmailConnectEngine, mailboxId: string) {
+  let perEngine = gmailRuntimeByEngine.get(engine);
+  if (!perEngine) {
+    perEngine = new Map();
+    gmailRuntimeByEngine.set(engine, perEngine);
+  }
+  let state = perEngine.get(mailboxId);
+  if (!state) {
+    state = { watch: null };
+    perEngine.set(mailboxId, state);
+  }
+  return state;
+}
+
+function normalizeMessageFormat(value: string | null | undefined): GmailMessageFormat {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'raw' || normalized === 'metadata') return normalized;
+  return 'full';
+}
+
+function normalizeMetadataHeaderFilter(values: string[] | null | undefined): Set<string> | null {
+  const filtered = (values || []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+  return filtered.length ? new Set(filtered) : null;
 }
 
 function parseGmailQueryValues(prefix: 'label' | 'from' | 'to' | 'subject', q?: string): string[] {
@@ -121,15 +188,25 @@ function messageHeaders(message: MailboxMessage): GmailMessagePayloadHeader[] {
   return headers;
 }
 
-function buildPayload(message: MailboxMessage): GmailMessagePayload {
+function filterPayloadHeaders(headers: GmailMessagePayloadHeader[], metadataHeaders?: string[]): GmailMessagePayloadHeader[] {
+  const wanted = normalizeMetadataHeaderFilter(metadataHeaders);
+  if (!wanted) return headers;
+  return headers.filter((header) => wanted.has(String(header.name || '').toLowerCase()));
+}
+
+function buildPayload(
+  message: MailboxMessage,
+  options?: { includeBodies?: boolean; metadataHeaders?: string[] },
+): GmailMessagePayload {
   const parts: GmailMessagePayload[] = [];
-  if (message.bodyText) {
+  const includeBodies = options?.includeBodies !== false;
+  if (includeBodies && message.bodyText) {
     parts.push({
       mimeType: 'text/plain',
       body: { data: encodeBase64Url(message.bodyText) },
     });
   }
-  if (message.bodyHtml) {
+  if (includeBodies && message.bodyHtml) {
     parts.push({
       mimeType: 'text/html',
       body: { data: encodeBase64Url(message.bodyHtml) },
@@ -147,18 +224,121 @@ function buildPayload(message: MailboxMessage): GmailMessagePayload {
   }
   return {
     mimeType: parts.length > 1 ? 'multipart/mixed' : parts[0]?.mimeType || 'text/plain',
-    headers: messageHeaders(message),
-    parts,
+    headers: filterPayloadHeaders(messageHeaders(message), options?.metadataHeaders),
+    ...(parts.length ? { parts } : {}),
   };
 }
 
-function buildMessage(message: MailboxMessage): GmailMessage {
-  return {
+function messageRawMime(message: MailboxMessage): string {
+  return renderRawEmail({
+    from: message.from,
+    to: message.to,
+    subject: message.subject,
+    date: message.receivedAt,
+    messageId: message.messageId,
+    inReplyTo: message.inReplyTo,
+    references: message.references,
+    bodyText: message.bodyText,
+    bodyHtml: message.bodyHtml,
+    headers: message.rawHeaders,
+    attachments: message.attachments.map((attachment) => ({
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      contentBytes: attachment.contentBytes,
+    })),
+  });
+}
+
+function messageInternalDate(message: MailboxMessage): string | undefined {
+  if (!message.receivedAt) return undefined;
+  const parsed = Date.parse(message.receivedAt);
+  return Number.isNaN(parsed) ? undefined : String(parsed);
+}
+
+function latestHistoryIdForMessage(mailbox: MailboxRecord, providerMessageId: string, engine: EmailConnectEngine): string | undefined {
+  const latest = engine
+    .listChanges(mailbox)
+    .filter((change) => change.providerMessageId === providerMessageId)
+    .at(-1)?.rowId;
+  return latest ? String(latest) : undefined;
+}
+
+function buildMessage(
+  mailbox: MailboxRecord,
+  message: MailboxMessage,
+  engine: EmailConnectEngine,
+  options?: { format?: GmailMessageFormat; metadataHeaders?: string[] },
+): GmailMessage {
+  const format = normalizeMessageFormat(options?.format);
+  const historyId = latestHistoryIdForMessage(mailbox, message.providerMessageId, engine);
+  const internalDate = messageInternalDate(message);
+  const raw = messageRawMime(message);
+  const base: GmailMessage = {
     id: message.providerMessageId,
     ...(message.providerThreadId ? { threadId: message.providerThreadId } : {}),
-    payload: buildPayload(message),
     labelIds: message.labels.map(mockGmailLabelId),
     ...(message.snippet ? { snippet: message.snippet } : {}),
+    ...(historyId ? { historyId } : {}),
+    ...(internalDate ? { internalDate } : {}),
+    sizeEstimate: Buffer.byteLength(raw, 'utf8'),
+  };
+
+  if (format === 'minimal') return base;
+  if (format === 'raw') return { ...base, raw: Buffer.from(raw, 'utf8').toString('base64url') };
+  if (format === 'metadata') {
+    return {
+      ...base,
+      payload: buildPayload(message, {
+        includeBodies: false,
+        ...(options?.metadataHeaders?.length ? { metadataHeaders: options.metadataHeaders } : {}),
+      }),
+    };
+  }
+  return {
+    ...base,
+    payload: buildPayload(message),
+  };
+}
+
+function threadMessages(messages: MailboxMessage[], mailbox: MailboxRecord, engine: EmailConnectEngine, options?: {
+  format?: GmailMessageFormat;
+  metadataHeaders?: string[];
+}): GmailMessage[] {
+  return messages
+    .slice()
+    .sort((left, right) => {
+      const a = left.receivedAt || '';
+      const b = right.receivedAt || '';
+      if (a === b) return left.rowId - right.rowId;
+      return a.localeCompare(b);
+    })
+    .map((message) => buildMessage(mailbox, message, engine, options));
+}
+
+function buildThread(mailbox: MailboxRecord, threadId: string, messages: MailboxMessage[], engine: EmailConnectEngine, options?: {
+  format?: GmailMessageFormat;
+  metadataHeaders?: string[];
+}): GmailThread {
+  const latestMessage = messages
+    .slice()
+    .sort((left, right) => {
+      const a = left.receivedAt || '';
+      const b = right.receivedAt || '';
+      if (a === b) return right.rowId - left.rowId;
+      return b.localeCompare(a);
+    })[0];
+  const historyId = engine
+    .listChanges(mailbox)
+    .filter((change) => {
+      const message = messages.find((entry) => entry.providerMessageId === change.providerMessageId);
+      return Boolean(message);
+    })
+    .at(-1)?.rowId;
+  return {
+    id: threadId,
+    ...(historyId ? { historyId: String(historyId) } : {}),
+    ...(latestMessage?.snippet ? { snippet: latestMessage.snippet } : {}),
+    messages: threadMessages(messages, mailbox, engine, options),
   };
 }
 
@@ -185,6 +365,12 @@ function matchesQuery(message: MailboxMessage, q?: string): boolean {
   }
 
   return true;
+}
+
+function matchesLabelFilter(message: MailboxMessage, labelIds?: string[]): boolean {
+  if (!labelIds?.length) return true;
+  const labels = new Set(message.labels.map((label) => mockGmailLabelId(label)));
+  return labelIds.every((labelId) => labels.has(labelId));
 }
 
 function historyRecordForChange(change: MailboxChange, message: MailboxMessage | undefined): GmailHistoryRecord[] {
@@ -295,9 +481,10 @@ export class GmailService {
 
   async listMessages(mailboxId: string, params: {
     q?: string;
+    labelIds?: string[];
     maxResults?: number;
     pageToken?: string;
-  }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string }>> {
+  }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.list');
@@ -306,6 +493,7 @@ export class GmailService {
     const filtered = this.engine
       .listVisibleMessages(mailbox)
       .filter((message) => matchesQuery(message, params.q))
+      .filter((message) => matchesLabelFilter(message, params.labelIds))
       .sort((left, right) => {
         const a = left.receivedAt || '';
         const b = right.receivedAt || '';
@@ -315,13 +503,62 @@ export class GmailService {
     const page = filtered.slice(offset, offset + maxResults);
     return {
       data: {
-        messages: page.map((message) => ({ id: message.providerMessageId })),
+        messages: page.map((message) => ({
+          id: message.providerMessageId,
+          ...(message.providerThreadId ? { threadId: message.providerThreadId } : {}),
+        })),
+        resultSizeEstimate: filtered.length,
         ...(filtered.length > offset + page.length ? { nextPageToken: String(offset + page.length) } : {}),
       },
     };
   }
 
-  async getMessage(mailboxId: string, providerMessageId: string): Promise<GmailApiResponse<GmailMessage>> {
+  async listThreads(mailboxId: string, params: {
+    q?: string;
+    labelIds?: string[];
+    maxResults?: number;
+    pageToken?: string;
+  }): Promise<GmailApiResponse<{ threads?: GmailThreadRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
+    const mailbox = this.engine.requireMailbox(mailboxId);
+    await this.engine.maybeDelay(mailbox);
+    this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.list');
+    const offset = parsePageToken(params.pageToken);
+    const maxResults = Math.max(1, Number(params.maxResults || 100));
+    const grouped = new Map<string, MailboxMessage[]>();
+    for (const message of this.engine.listVisibleMessages(mailbox)) {
+      if (!matchesQuery(message, params.q) || !matchesLabelFilter(message, params.labelIds)) continue;
+      const threadId = message.providerThreadId || message.providerMessageId;
+      const existing = grouped.get(threadId) || [];
+      existing.push(message);
+      grouped.set(threadId, existing);
+    }
+    const threads = Array.from(grouped.entries())
+      .map(([threadId, messages]) => buildThread(mailbox, threadId, messages, this.engine))
+      .sort((left, right) => {
+        const a = String(left.messages?.at(-1)?.internalDate || '0');
+        const b = String(right.messages?.at(-1)?.internalDate || '0');
+        if (a === b) return String(right.id || '').localeCompare(String(left.id || ''));
+        return b.localeCompare(a);
+      });
+    const page = threads.slice(offset, offset + maxResults);
+    return {
+      data: {
+        threads: page.map((thread) => ({
+          ...(thread.id ? { id: thread.id } : {}),
+          ...(thread.historyId ? { historyId: thread.historyId } : {}),
+          ...(thread.snippet ? { snippet: thread.snippet } : {}),
+        })),
+        resultSizeEstimate: threads.length,
+        ...(threads.length > offset + page.length ? { nextPageToken: String(offset + page.length) } : {}),
+      },
+    };
+  }
+
+  async getMessage(
+    mailboxId: string,
+    providerMessageId: string,
+    options?: { format?: string; metadataHeaders?: string[] },
+  ): Promise<GmailApiResponse<GmailMessage>> {
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.get');
@@ -329,7 +566,32 @@ export class GmailService {
     if (!message) {
       throw new NotFoundError(`Mock Gmail message not found (${providerMessageId})`);
     }
-    return { data: buildMessage(message) };
+    return {
+      data: buildMessage(mailbox, message, this.engine, {
+        format: normalizeMessageFormat(options?.format),
+        ...(options?.metadataHeaders?.length ? { metadataHeaders: options.metadataHeaders } : {}),
+      }),
+    };
+  }
+
+  async getThread(
+    mailboxId: string,
+    providerThreadId: string,
+    options?: { format?: string; metadataHeaders?: string[] },
+  ): Promise<GmailApiResponse<GmailThread>> {
+    const mailbox = this.engine.requireMailbox(mailboxId);
+    await this.engine.maybeDelay(mailbox);
+    this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.get');
+    const messages = this.engine.listVisibleMessages(mailbox).filter((entry) => (entry.providerThreadId || entry.providerMessageId) === providerThreadId);
+    if (!messages.length) {
+      throw new NotFoundError(`Mock Gmail thread not found (${providerThreadId})`);
+    }
+    return {
+      data: buildThread(mailbox, providerThreadId, messages, this.engine, {
+        format: normalizeMessageFormat(options?.format),
+        ...(options?.metadataHeaders?.length ? { metadataHeaders: options.metadataHeaders } : {}),
+      }),
+    };
   }
 
   async getAttachment(mailboxId: string, providerMessageId: string, attachmentId: string): Promise<GmailApiResponse<{ data?: string }>> {
@@ -459,6 +721,14 @@ export class GmailService {
       subject: parsed.subject,
       bodyText: parsed.bodyText,
       bodyHtml: parsed.bodyHtml,
+      attachments: parsed.attachments.map((attachment) => ({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        contentBytes: attachment.contentBytes,
+        attachmentType: 'file',
+        ...(attachment.isInline ? { isInline: true } : {}),
+        ...(attachment.contentId ? { contentId: attachment.contentId } : {}),
+      })),
     });
     const outbox = this.engine.sendDraft(mailboxId, tempDraftId, 'gmail', this.engine.generateId('gmail-sent'));
     return {
@@ -467,6 +737,100 @@ export class GmailService {
         ...(outbox.providerThreadId ? { threadId: outbox.providerThreadId } : {}),
       },
     };
+  }
+
+  async importMessage(
+    mailboxId: string,
+    requestBody: Record<string, unknown>,
+    mode: 'import' | 'insert',
+  ): Promise<GmailApiResponse<GmailMessage>> {
+    const mailbox = this.engine.requireMailbox(mailboxId);
+    await this.engine.maybeDelay(mailbox);
+    this.engine.maybeThrowInjectedFailure(mailbox, mode === 'import' ? 'gmail.messages.import' : 'gmail.messages.insert');
+    const raw = String(requestBody.raw || '');
+    const parsed = parseRawEmailBase64Url(raw);
+    const internalDateSource = String(requestBody.internalDateSource || '').trim().toLowerCase();
+    const dateFromHeader =
+      internalDateSource === 'dateheader' && parsed.date ? new Date(parsed.date) : null;
+    const receivedAt =
+      dateFromHeader && !Number.isNaN(dateFromHeader.getTime()) ? dateFromHeader.toISOString() : this.engine.nowIso();
+    const inserted = this.engine.appendMessage(mailboxId, {
+      ...(String(requestBody.threadId || '').trim()
+        ? { providerThreadId: String(requestBody.threadId || '').trim() }
+        : {}),
+      from: parsed.from,
+      to: parsed.to,
+      subject: parsed.subject,
+      messageId: parsed.messageId,
+      inReplyTo: parsed.inReplyTo,
+      references: parsed.references,
+      bodyText: parsed.bodyText,
+      bodyHtml: parsed.bodyHtml,
+      rawHeaders: parsed.headers,
+      attachments: parsed.attachments.map((attachment) => ({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        contentBytes: attachment.contentBytes,
+        attachmentType: 'file',
+        ...(attachment.isInline ? { isInline: true } : {}),
+        ...(attachment.contentId ? { contentId: attachment.contentId } : {}),
+      })),
+      ...(Array.isArray(requestBody.labelIds)
+        ? {
+            labels: requestBody.labelIds
+              .map((labelId) => String(labelId || '').trim())
+              .filter(Boolean)
+              .map((labelId) => {
+                const match = labelId.match(/^Label_(.+)$/);
+                return match?.[1] ? Buffer.from(match[1], 'base64url').toString('utf8') : labelId;
+              }),
+          }
+        : {}),
+      receivedAt,
+    });
+    if (requestBody.deleted === true) {
+      this.engine.deleteMessage(mailboxId, inserted.providerMessageId);
+    }
+    return {
+      data: buildMessage(mailbox, this.engine.listAllMessages(mailbox).find((entry) => entry.providerMessageId === inserted.providerMessageId)!, this.engine, {
+        format: 'full',
+      }),
+    };
+  }
+
+  async watchMailbox(
+    mailboxId: string,
+    requestBody: Record<string, unknown>,
+  ): Promise<GmailApiResponse<GmailWatchResponse>> {
+    const mailbox = this.engine.requireMailbox(mailboxId);
+    await this.engine.maybeDelay(mailbox);
+    this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.watch.create');
+    const latestHistoryId = String(this.engine.listChanges(mailbox).at(-1)?.rowId || 0);
+    const expiration = new Date(Date.parse(this.engine.nowIso()) + 7 * 24 * 3600 * 1000).getTime();
+    gmailRuntime(this.engine, mailboxId).watch = {
+      topicName: String(requestBody.topicName || '').trim() || 'projects/email-connect/topics/gmail-watch',
+      labelIds: Array.isArray(requestBody.labelIds)
+        ? requestBody.labelIds.map((entry) => String(entry || '').trim()).filter(Boolean)
+        : [],
+      labelFilterAction:
+        String(requestBody.labelFilterAction || '').trim().toLowerCase() === 'exclude' ? 'exclude' : 'include',
+      expiration: String(expiration),
+      historyId: latestHistoryId,
+    };
+    return {
+      data: {
+        historyId: latestHistoryId,
+        expiration: String(expiration),
+      },
+    };
+  }
+
+  async stopWatching(mailboxId: string): Promise<GmailApiResponse<Record<string, never>>> {
+    const mailbox = this.engine.requireMailbox(mailboxId);
+    await this.engine.maybeDelay(mailbox);
+    this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.watch.stop');
+    gmailRuntime(this.engine, mailboxId).watch = null;
+    return { data: {} };
   }
 
   async createPlainDraft(mailboxId: string, params: {

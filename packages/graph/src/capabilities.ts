@@ -53,6 +53,7 @@ export function isGraphOperationAuthorized(scopes: string[], operation: string):
     normalized === 'graph.inbox.messages.list' ||
     normalized === 'graph.delta.get' ||
     normalized === 'graph.message.get' ||
+    normalized === 'graph.message.value' ||
     normalized === 'graph.attachments.list' ||
     normalized === 'graph.attachment.get'
   ) {
@@ -65,11 +66,14 @@ export function isGraphOperationAuthorized(scopes: string[], operation: string):
     normalized === 'graph.draft.create' ||
     normalized === 'graph.draft.update' ||
     normalized === 'graph.message.delete' ||
-    normalized === 'graph.reply.create'
+    normalized === 'graph.reply.create' ||
+    normalized === 'graph.message.move' ||
+    normalized === 'graph.message.copy' ||
+    normalized === 'graph.attachment.upload.create'
   ) {
     return hasAnyScope(granted, ['https://graph.microsoft.com/mail.readwrite']);
   }
-  if (normalized === 'graph.draft.send') {
+  if (normalized === 'graph.draft.send' || normalized === 'graph.sendmail.post') {
     return hasAnyScope(granted, ['https://graph.microsoft.com/mail.send']);
   }
   return true;

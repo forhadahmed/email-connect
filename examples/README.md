@@ -29,7 +29,9 @@ That mirrors how a real consumer would buy and compose the project.
 - Graph basic receive: [basic-receive-graph.example.ts](./basic-receive-graph.example.ts)
 - Graph advanced receive: [advanced-receive-graph.example.ts](./advanced-receive-graph.example.ts)
 - Graph basic send: [basic-send-graph.example.ts](./basic-send-graph.example.ts)
+- Graph basic sendMail: [basic-sendmail-graph.example.ts](./basic-sendmail-graph.example.ts)
 - Graph advanced send: [advanced-send-graph.example.ts](./advanced-send-graph.example.ts)
+- Graph insurance pipeline: [insurance-processing-pipeline.example.ts](./insurance-processing-pipeline.example.ts)
 - Graph basic connect: [basic-connect-graph.example.ts](./basic-connect-graph.example.ts)
 - Graph advanced connect: [advanced-connect-graph.example.ts](./advanced-connect-graph.example.ts)
 - Graph adversarial receive: [adversarial-graph-stale-delta.example.ts](./adversarial-graph-stale-delta.example.ts)
@@ -43,9 +45,9 @@ That mirrors how a real consumer would buy and compose the project.
 
 ## Reading The Examples
 
-- "Outside world" means a carrier, broker, or shipper causing inbound mail to
-  appear. In white-box tests, that is usually modeled by calling
-  `engine.appendMessage(...)`.
+- "Outside world" means a claimant, customer, vendor, carrier, broker, or
+  shipper causing inbound mail to appear. In white-box tests, that is usually
+  modeled by calling `engine.appendMessage(...)`.
 - In black-box examples, "outside world" usually means hitting the admin
   control plane to seed mailbox state before the provider-facing flow begins.
 - "Inside world" means the system under test using Gmail-like or Graph-like

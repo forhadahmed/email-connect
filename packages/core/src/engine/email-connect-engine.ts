@@ -108,6 +108,12 @@ function cloneAttachment(attachment: MailboxAttachment): MailboxAttachment {
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
     contentBytes: new Uint8Array(attachment.contentBytes),
+    attachmentType: attachment.attachmentType,
+    isInline: attachment.isInline,
+    contentId: attachment.contentId,
+    contentLocation: attachment.contentLocation,
+    sourceUrl: attachment.sourceUrl,
+    embeddedMessage: attachment.embeddedMessage ? { ...attachment.embeddedMessage } : null,
   };
 }
 
@@ -121,7 +127,10 @@ function cloneMessage(message: MailboxMessage): MailboxMessage {
 }
 
 function cloneDraft(draft: MailboxDraft): MailboxDraft {
-  return { ...draft };
+  return {
+    ...draft,
+    attachments: draft.attachments.map(cloneAttachment),
+  };
 }
 
 /**
@@ -486,6 +495,17 @@ export class EmailConnectEngine {
     return cloneAttachment(attachment);
   }
 
+  addDraftAttachment(identifier: string, providerDraftId: string, seed: AttachmentSeed): MailboxAttachment {
+    const mailbox = this.requireMailbox(identifier);
+    const draft = mailbox.drafts.find((entry) => entry.providerDraftId === providerDraftId);
+    if (!draft) {
+      throw new NotFoundError(`Draft not found: ${providerDraftId}`);
+    }
+    const attachment = this.materializeAttachment(seed);
+    draft.attachments.push(attachment);
+    return cloneAttachment(attachment);
+  }
+
   createDraft(identifier: string, seed: DraftSeed): MailboxDraft {
     const mailbox = this.requireMailbox(identifier);
     const providerDraftId = cleanString(seed.providerDraftId) || this.generateId(`${mailbox.provider}-draft`);
@@ -501,6 +521,7 @@ export class EmailConnectEngine {
       subject: cleanString(seed.subject),
       bodyText: String(seed.bodyText || ''),
       bodyHtml: cleanString(seed.bodyHtml),
+      attachments: (seed.attachments || []).map((attachment) => this.materializeAttachment(attachment)),
     };
     mailbox.drafts.push(draft);
     return cloneDraft(draft);
@@ -672,6 +693,22 @@ export class EmailConnectEngine {
       mimeType: String(seed.mimeType || '').trim() || 'application/octet-stream',
       sizeBytes: seed.sizeBytes == null ? bytes.byteLength : Number(seed.sizeBytes),
       contentBytes: bytes,
+      attachmentType:
+        seed.attachmentType === 'item' || seed.attachmentType === 'reference' ? seed.attachmentType : 'file',
+      isInline: Boolean(seed.isInline),
+      contentId: cleanString(seed.contentId),
+      contentLocation: cleanString(seed.contentLocation),
+      sourceUrl: cleanString(seed.sourceUrl),
+      embeddedMessage: seed.embeddedMessage
+        ? {
+            subject: cleanString(seed.embeddedMessage.subject),
+            from: cleanString(seed.embeddedMessage.from),
+            to: normalizeAddressInput(seed.embeddedMessage.to),
+            bodyText: cleanString(seed.embeddedMessage.bodyText),
+            bodyHtml: cleanString(seed.embeddedMessage.bodyHtml),
+            receivedAt: normalizeDate(seed.embeddedMessage.receivedAt),
+          }
+        : null,
     };
   }
 

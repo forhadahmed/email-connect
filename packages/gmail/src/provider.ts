@@ -2,6 +2,20 @@ import { EmailConnectError, type EmailConnectProvider, type MailboxRecord } from
 import { defaultGmailScopesForCapabilityMode, isGmailOperationAuthorized } from './capabilities.js';
 import { GmailService } from './service.js';
 
+function gmailMessageGetOperation(format: string | null): string {
+  const normalized = String(format || '').trim().toLowerCase();
+  return normalized === 'full' || normalized === 'raw' ? 'gmail.messages.get.body' : 'gmail.messages.get.metadata';
+}
+
+function gmailThreadGetOperation(format: string | null): string {
+  const normalized = String(format || '').trim().toLowerCase();
+  return normalized === 'full' || normalized === 'raw' ? 'gmail.threads.get.body' : 'gmail.threads.get.metadata';
+}
+
+function gmailListOperation(q: string | null): string {
+  return String(q || '').trim() ? 'gmail.messages.list.search' : 'gmail.messages.list';
+}
+
 function gmailUserInfo(mailbox: MailboxRecord): Record<string, unknown> {
   return {
     sub: mailbox.providerUserId,
@@ -130,33 +144,59 @@ export const gmailProvider: EmailConnectProvider = {
 
       if (method === 'GET' && pathname === '/gmail/v1/users/me/profile') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.profile.get');
-        context.sendJson(200, await service.getProfile(mailbox.id));
+        context.sendJson(200, (await service.getProfile(mailbox.id)).data);
         return true;
       }
 
       if (method === 'GET' && pathname === '/gmail/v1/users/me/labels') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.labels.list');
-        context.sendJson(200, await service.listLabels(mailbox.id));
+        context.sendJson(200, (await service.listLabels(mailbox.id)).data);
         return true;
       }
 
       if (method === 'GET' && pathname === '/gmail/v1/users/me/messages') {
-        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.messages.list');
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, gmailListOperation(url.searchParams.get('q')));
         context.sendJson(
           200,
-          await service.listMessages(mailbox.id, {
+          (
+            await service.listMessages(mailbox.id, {
             ...(url.searchParams.get('q') ? { q: String(url.searchParams.get('q')) } : {}),
+            ...(url.searchParams.getAll('labelIds').length ? { labelIds: url.searchParams.getAll('labelIds') } : {}),
             ...(url.searchParams.get('maxResults') ? { maxResults: Number(url.searchParams.get('maxResults')) } : {}),
             ...(url.searchParams.get('pageToken') ? { pageToken: String(url.searchParams.get('pageToken')) } : {}),
-          }),
+            })
+          ).data,
         );
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/gmail/v1/users/me/messages/import') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.messages.import');
+        context.sendJson(200, (await service.importMessage(mailbox.id, await context.readJsonBody(), 'import')).data);
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/gmail/v1/users/me/messages') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.messages.insert');
+        context.sendJson(200, (await service.importMessage(mailbox.id, await context.readJsonBody(), 'insert')).data);
         return true;
       }
 
       const messageMatch = context.matchPath(pathname, /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/);
       if (method === 'GET' && messageMatch?.[1]) {
-        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.messages.get');
-        context.sendJson(200, await service.getMessage(mailbox.id, decodeURIComponent(messageMatch[1])));
+        const format = url.searchParams.get('format');
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, gmailMessageGetOperation(format));
+        context.sendJson(
+          200,
+          (
+            await service.getMessage(mailbox.id, decodeURIComponent(messageMatch[1]), {
+              ...(format ? { format } : {}),
+              ...(url.searchParams.getAll('metadataHeaders').length
+                ? { metadataHeaders: url.searchParams.getAll('metadataHeaders') }
+                : {}),
+            })
+          ).data,
+        );
         return true;
       }
 
@@ -165,7 +205,9 @@ export const gmailProvider: EmailConnectProvider = {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.attachments.get');
         context.sendJson(
           200,
-          await service.getAttachment(mailbox.id, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2])),
+          (
+            await service.getAttachment(mailbox.id, decodeURIComponent(attachmentMatch[1]), decodeURIComponent(attachmentMatch[2]))
+          ).data,
         );
         return true;
       }
@@ -175,30 +217,78 @@ export const gmailProvider: EmailConnectProvider = {
         const historyTypes = url.searchParams.getAll('historyTypes').filter(Boolean);
         context.sendJson(
           200,
-          await service.listHistory(mailbox.id, {
+          (
+            await service.listHistory(mailbox.id, {
             startHistoryId: String(url.searchParams.get('startHistoryId') || ''),
             ...(url.searchParams.get('pageToken') ? { pageToken: String(url.searchParams.get('pageToken')) } : {}),
             ...(historyTypes.length ? { historyTypes } : {}),
-          }),
+            })
+          ).data,
         );
+        return true;
+      }
+
+      if (method === 'GET' && pathname === '/gmail/v1/users/me/threads') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.threads.list');
+        context.sendJson(
+          200,
+          (
+            await service.listThreads(mailbox.id, {
+              ...(url.searchParams.get('q') ? { q: String(url.searchParams.get('q')) } : {}),
+              ...(url.searchParams.getAll('labelIds').length ? { labelIds: url.searchParams.getAll('labelIds') } : {}),
+              ...(url.searchParams.get('maxResults') ? { maxResults: Number(url.searchParams.get('maxResults')) } : {}),
+              ...(url.searchParams.get('pageToken') ? { pageToken: String(url.searchParams.get('pageToken')) } : {}),
+            })
+          ).data,
+        );
+        return true;
+      }
+
+      const threadMatch = context.matchPath(pathname, /^\/gmail\/v1\/users\/me\/threads\/([^/]+)$/);
+      if (method === 'GET' && threadMatch?.[1]) {
+        const format = url.searchParams.get('format');
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, gmailThreadGetOperation(format));
+        context.sendJson(
+          200,
+          (
+            await service.getThread(mailbox.id, decodeURIComponent(threadMatch[1]), {
+              ...(format ? { format } : {}),
+              ...(url.searchParams.getAll('metadataHeaders').length
+                ? { metadataHeaders: url.searchParams.getAll('metadataHeaders') }
+                : {}),
+            })
+          ).data,
+        );
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/gmail/v1/users/me/watch') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.watch.create');
+        context.sendJson(200, (await service.watchMailbox(mailbox.id, await context.readJsonBody())).data);
+        return true;
+      }
+
+      if (method === 'POST' && pathname === '/gmail/v1/users/me/stop') {
+        const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.watch.stop');
+        context.sendJson(200, (await service.stopWatching(mailbox.id)).data);
         return true;
       }
 
       if (method === 'POST' && pathname === '/gmail/v1/users/me/drafts') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.drafts.create');
-        context.sendJson(200, await service.createDraft(mailbox.id, await context.readJsonBody()));
+        context.sendJson(200, (await service.createDraft(mailbox.id, await context.readJsonBody())).data);
         return true;
       }
 
       if (method === 'POST' && pathname === '/gmail/v1/users/me/drafts/send') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.drafts.send');
-        context.sendJson(200, await service.sendDraft(mailbox.id, await context.readJsonBody()));
+        context.sendJson(200, (await service.sendDraft(mailbox.id, await context.readJsonBody())).data);
         return true;
       }
 
       if (method === 'POST' && pathname === '/gmail/v1/users/me/messages/send') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.messages.send');
-        context.sendJson(200, await service.sendMessage(mailbox.id, await context.readJsonBody()));
+        context.sendJson(200, (await service.sendMessage(mailbox.id, await context.readJsonBody())).data);
         return true;
       }
 

@@ -213,6 +213,13 @@ describe('connect http server', () => {
     expect(readMessages.response.status).toBe(200);
     expect(readMessages.body.value).toHaveLength(1);
 
+    const readMime = await fetch(`${baseUrl}/graph/v1.0/me/messages/graph-msg-1/$value`, {
+      headers: {
+        Authorization: `Bearer ${readToken.body.access_token}`,
+      },
+    });
+    expect(readMime.status).toBe(200);
+
     const blockedDraft = await fetch(`${baseUrl}/graph/v1.0/me/messages`, {
       method: 'POST',
       headers: {
@@ -226,6 +233,22 @@ describe('connect http server', () => {
       }),
     });
     expect(blockedDraft.status).toBe(401);
+
+    const blockedSendMail = await fetch(`${baseUrl}/graph/v1.0/me/sendMail`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${readToken.body.access_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          subject: 'Blocked sendMail',
+          toRecipients: [{ emailAddress: { address: 'shipper@example.com' } }],
+          body: { contentType: 'Text', content: 'Blocked sendMail body' },
+        },
+      }),
+    });
+    expect(blockedSendMail.status).toBe(401);
 
     const sendAuthorize = await fetch(
       `${baseUrl}/common/oauth2/v2.0/authorize?client_id=graph-http-client&redirect_uri=${encodeURIComponent('https://app.example.test/oauth/microsoft/callback')}&response_type=code&scope=${encodeURIComponent('offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send')}&state=graph-send&login_hint=${encodeURIComponent('dispatch@example.com')}&email_connect_mode=send`,
@@ -258,6 +281,38 @@ describe('connect http server', () => {
     });
     expect(createdDraft.response.status).toBe(200);
     expect(createdDraft.body.id).toBeTruthy();
+
+    const uploadSession = await jsonFetch(`${baseUrl}/graph/v1.0/me/messages/${createdDraft.body.id}/attachments/createUploadSession`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sendToken.body.access_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        AttachmentItem: {
+          attachmentType: 'file',
+          name: 'send-scope.bin',
+          size: 6,
+        },
+      }),
+    });
+    expect(uploadSession.response.status).toBe(201);
+
+    const allowedSendMail = await fetch(`${baseUrl}/graph/v1.0/me/sendMail`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sendToken.body.access_token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          subject: 'Allowed sendMail',
+          toRecipients: [{ emailAddress: { address: 'shipper@example.com' } }],
+          body: { contentType: 'Text', content: 'Allowed sendMail body' },
+        },
+      }),
+    });
+    expect(allowedSendMail.status).toBe(202);
 
     const refreshed = await formFetch(`${baseUrl}/common/oauth2/v2.0/token`, {
       grant_type: 'refresh_token',
@@ -389,6 +444,108 @@ describe('connect http server', () => {
       },
     });
     expect(labels.response.status).toBe(200);
+  });
+
+  it('enforces Gmail metadata-scope behavior for metadata reads versus body and attachment access', async () => {
+    const server = new EmailConnectHttpServer();
+    servers.push(server);
+    const { baseUrl, adminToken } = await server.listen();
+
+    await jsonFetch(`${baseUrl}/__email-connect/v1/mailboxes`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-email-connect-admin-token': adminToken,
+      },
+      body: JSON.stringify({
+        id: 'gmail-http-metadata',
+        provider: 'gmail',
+        primaryEmail: 'metadata@example.com',
+        auth: {
+          refreshToken: null,
+        },
+        messages: [
+          {
+            providerMessageId: 'gmail-metadata-msg',
+            subject: 'Metadata only',
+            bodyText: 'Body should be blocked',
+            attachments: [
+              {
+                providerAttachmentId: 'gmail-metadata-att',
+                filename: 'blocked.pdf',
+                mimeType: 'application/pdf',
+                contentBytes: 'blocked-pdf',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    await jsonFetch(`${baseUrl}/__email-connect/v1/connect/clients`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-email-connect-admin-token': adminToken,
+      },
+      body: JSON.stringify({
+        provider: 'gmail',
+        clientId: 'gmail-http-metadata-client',
+        clientSecret: 'gmail-http-metadata-secret',
+        redirectUris: ['https://app.example.test/oauth/google/callback'],
+        defaultConsentMode: 'auto_approve',
+      }),
+    });
+
+    const authorize = await fetch(
+      `${baseUrl}/o/oauth2/v2/auth?client_id=gmail-http-metadata-client&redirect_uri=${encodeURIComponent('https://app.example.test/oauth/google/callback')}&response_type=code&scope=${encodeURIComponent('https://www.googleapis.com/auth/gmail.metadata')}&state=gmail-metadata&login_hint=${encodeURIComponent('metadata@example.com')}&access_type=online`,
+      { redirect: 'manual' },
+    );
+    expect(authorize.status).toBe(302);
+    const code = new URL(String(authorize.headers.get('location') || '')).searchParams.get('code');
+    expect(code).toBeTruthy();
+
+    const token = await formFetch(`${baseUrl}/token`, {
+      grant_type: 'authorization_code',
+      client_id: 'gmail-http-metadata-client',
+      client_secret: 'gmail-http-metadata-secret',
+      redirect_uri: 'https://app.example.test/oauth/google/callback',
+      code: String(code),
+    });
+    expect(token.response.status).toBe(200);
+    expect(String(token.body.scope || '')).toContain('gmail.metadata');
+
+    const allowedMetadata = await jsonFetch(
+      `${baseUrl}/gmail/v1/users/me/messages/gmail-metadata-msg?format=metadata&metadataHeaders=subject`,
+      {
+        headers: {
+          Authorization: `Bearer ${token.body.access_token}`,
+        },
+      },
+    );
+    expect(allowedMetadata.response.status).toBe(200);
+    expect(allowedMetadata.body.payload.headers).toEqual([{ name: 'Subject', value: 'Metadata only' }]);
+
+    const blockedSearch = await fetch(`${baseUrl}/gmail/v1/users/me/messages?q=subject:Metadata`, {
+      headers: {
+        Authorization: `Bearer ${token.body.access_token}`,
+      },
+    });
+    expect(blockedSearch.status).toBe(401);
+
+    const blockedRaw = await fetch(`${baseUrl}/gmail/v1/users/me/messages/gmail-metadata-msg?format=raw`, {
+      headers: {
+        Authorization: `Bearer ${token.body.access_token}`,
+      },
+    });
+    expect(blockedRaw.status).toBe(401);
+
+    const blockedAttachment = await fetch(`${baseUrl}/gmail/v1/users/me/messages/gmail-metadata-msg/attachments/gmail-metadata-att`, {
+      headers: {
+        Authorization: `Bearer ${token.body.access_token}`,
+      },
+    });
+    expect(blockedAttachment.status).toBe(401);
   });
 
   it('returns provider-shaped authorization denial details for Microsoft interactive consent', async () => {

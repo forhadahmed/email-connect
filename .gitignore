@@ -1,8 +1,18 @@
-# Local dependency installs are runtime artifacts, not source.
+# Dependency installs are runtime artifacts, not source.
 node_modules/
 
-# Test and coverage outputs are reproducible and should not be tracked.
+# Build and coverage outputs are reproducible and should not be tracked.
+dist/
 coverage/
+*.tsbuildinfo
+
+# Local test and tool caches.
+.vite/
+.vitest/
+.npm/
+*.log
 
 # Common local editor and OS noise.
 .DS_Store
+.idea/
+.vscode/

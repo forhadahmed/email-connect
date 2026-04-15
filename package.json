@@ -3,12 +3,22 @@
   "version": "0.1.0",
   "private": false,
   "description": "A standalone Gmail and Microsoft Graph mail simulation harness with first-class HTTP facades and embeddable SDK surfaces.",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "workspaces": [
     "packages/*"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "TODO.md",
+    "VERSIONING.md",
+    "RELEASING.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -19,11 +29,36 @@
       "import": "./dist/server/index.js"
     }
   },
+  "keywords": [
+    "email",
+    "gmail",
+    "graph",
+    "microsoft-graph",
+    "oauth",
+    "mock",
+    "simulation",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forhad/email-connect.git"
+  },
+  "bugs": {
+    "url": "https://github.com/forhad/email-connect/issues"
+  },
+  "homepage": "https://github.com/forhad/email-connect#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "npm run build --workspace=@email-connect/core && npm run build --workspace=@email-connect/gmail && npm run build --workspace=@email-connect/graph && tsc -p tsconfig.build.json",
-    "check": "npm run build --workspace=@email-connect/core && npm run check --workspace=@email-connect/core && npm run check --workspace=@email-connect/gmail && npm run check --workspace=@email-connect/graph && tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run check --workspace=@email-connect/core && npm run check --workspace=@email-connect/gmail && npm run check --workspace=@email-connect/graph && tsc -p tsconfig.json --noEmit",
+    "check:publish": "node ./scripts/check-publish.mjs",
+    "smoke:packages": "node ./scripts/smoke-packages.mjs",
+    "check": "npm run build && npm run typecheck && npm run check:publish && npm run smoke:packages",
     "test": "vitest run",
     "test:watch": "vitest",
+    "release:verify": "npm test && npm run check",
     "clean": "rm -rf dist coverage packages/core/dist packages/gmail/dist packages/graph/dist"
   },
   "engines": {

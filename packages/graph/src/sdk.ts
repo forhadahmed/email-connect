@@ -5,6 +5,7 @@ export type GraphRequestLike = {
   header(name: string, value: string): GraphRequestLike;
   get(): Promise<any>;
   post(body?: unknown): Promise<any>;
+  put(body: Uint8Array | ArrayBuffer | Buffer | string): Promise<any>;
   patch(body: Record<string, unknown>): Promise<any>;
   delete(): Promise<void>;
 };
@@ -31,6 +32,14 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
     const parsedUrl = new URL(path, 'https://graph.microsoft.com/v1.0');
     const pathname = parsedUrl.pathname;
     let headers: Record<string, string> = {};
+    const bodyContentType = () =>
+      headers.prefer?.match(/outlook\.body-content-type\s*=\s*"?(text|html)"?/i)?.[1]?.toLowerCase() === 'text'
+        ? 'text'
+        : headers.prefer
+            ?.match(/outlook\.body-content-type\s*=\s*"?(text|html)"?/i)?.[1]
+            ?.toLowerCase() === 'html'
+          ? 'html'
+          : undefined;
     const request: GraphRequestLike = {
       header(name: string, value: string) {
         headers = { ...headers, [name.toLowerCase()]: value };
@@ -39,19 +48,25 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
       async get() {
         if (pathname === '/me') return service.getMe(mailboxId);
         if (pathname === '/me/mailFolders/inbox/messages/delta') {
-          return service.delta(mailboxId, path, 'https://graph.microsoft.com');
+          return service.delta(mailboxId, path, 'https://graph.microsoft.com', { bodyContentType: bodyContentType() });
         }
         if (pathname === '/me/mailFolders/inbox/messages') {
-          return service.listInboxMessages(mailboxId, path, 'https://graph.microsoft.com');
+          return service.listInboxMessages(mailboxId, path, 'https://graph.microsoft.com', { bodyContentType: bodyContentType() });
         }
         if (pathname === '/me/messages') {
-          return service.listMessages(mailboxId, path, 'https://graph.microsoft.com');
+          return service.listMessages(mailboxId, path, 'https://graph.microsoft.com', { bodyContentType: bodyContentType() });
+        }
+        const messageValueMatch = pathname.match(/^\/me\/messages\/([^/]+)\/\$value$/);
+        if (messageValueMatch) {
+          const messageId = messageValueMatch[1];
+          if (!messageId) throw new Error(`Unsupported Graph message $value path: ${path}`);
+          return service.getMessageValue(mailboxId, decodeURIComponent(messageId));
         }
         const messageMatch = pathname.match(/^\/me\/messages\/([^/]+)$/);
         if (messageMatch && !pathname.includes('/attachments/')) {
           const messageId = messageMatch[1];
           if (!messageId) throw new Error(`Unsupported Graph message path: ${path}`);
-          return service.getMessage(mailboxId, decodeURIComponent(messageId));
+          return service.getMessage(mailboxId, decodeURIComponent(messageId), { bodyContentType: bodyContentType() });
         }
         const attachmentsMatch = pathname.match(/^\/me\/messages\/([^/]+)\/attachments$/);
         if (attachmentsMatch) {
@@ -79,6 +94,7 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
             mailboxId,
             decodeURIComponent(messageId),
             decodeURIComponent(attachmentId),
+            { bodyContentType: bodyContentType() },
           );
         }
         throw new Error(`Unsupported Graph GET path: ${path}; headers=${JSON.stringify(headers)}`);
@@ -96,10 +112,66 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
           if (!draftId) throw new Error(`Unsupported Graph send path: ${path}`);
           return service.sendDraft(mailboxId, decodeURIComponent(draftId));
         }
+        const moveMatch = pathname.match(/^\/me\/messages\/([^/]+)\/move$/);
+        if (moveMatch) {
+          const messageId = moveMatch[1];
+          if (!messageId) throw new Error(`Unsupported Graph move path: ${path}`);
+          return service.moveMessage(
+            mailboxId,
+            decodeURIComponent(messageId),
+            String((body as Record<string, unknown> | undefined)?.destinationId || '').trim() || 'archive',
+            { bodyContentType: bodyContentType() },
+          );
+        }
+        const copyMatch = pathname.match(/^\/me\/messages\/([^/]+)\/copy$/);
+        if (copyMatch) {
+          const messageId = copyMatch[1];
+          if (!messageId) throw new Error(`Unsupported Graph copy path: ${path}`);
+          return service.copyMessage(
+            mailboxId,
+            decodeURIComponent(messageId),
+            String((body as Record<string, unknown> | undefined)?.destinationId || '').trim() || 'archive',
+            { bodyContentType: bodyContentType() },
+          );
+        }
+        const uploadMatch = pathname.match(/^\/me\/messages\/([^/]+)\/attachments\/createUploadSession$/);
+        if (uploadMatch) {
+          const messageId = uploadMatch[1];
+          if (!messageId) throw new Error(`Unsupported Graph upload-session path: ${path}`);
+          return service.createAttachmentUploadSession(
+            mailboxId,
+            decodeURIComponent(messageId),
+            (body || {}) as Record<string, unknown>,
+            'https://graph.microsoft.com',
+          );
+        }
+        if (pathname === '/me/sendMail') {
+          await service.sendMail(mailboxId, body as Record<string, unknown> | string | Uint8Array | Buffer);
+          return {};
+        }
         if (pathname === '/me/messages') {
           return service.createDraft(mailboxId, (body || {}) as Record<string, unknown>);
         }
         throw new Error(`Unsupported Graph POST path: ${path}`);
+      },
+      async put(body: Uint8Array | ArrayBuffer | Buffer | string) {
+        if (pathname.startsWith('/__email-connect/upload/graph/')) {
+          const bytes =
+            typeof body === 'string'
+              ? new Uint8Array(Buffer.from(body))
+              : body instanceof Uint8Array
+                ? body
+                : body instanceof ArrayBuffer
+                  ? new Uint8Array(body)
+                  : new Uint8Array(body);
+          const outcome = await service.uploadAttachmentChunk(
+            `${pathname}${parsedUrl.search}`,
+            bytes,
+            Object.fromEntries(Object.entries(headers)),
+          );
+          return outcome.body;
+        }
+        throw new Error(`Unsupported Graph PUT path: ${path}`);
       },
       async patch(body: Record<string, unknown>) {
         const draftMatch = pathname.match(/^\/me\/messages\/([^/]+)$/);

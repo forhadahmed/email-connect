@@ -46,10 +46,15 @@ export type EmailConnectHttpRouteContext = {
   res: ServerResponse;
   readJsonBody(): Promise<Record<string, unknown>>;
   readFormBody(): Promise<Record<string, string>>;
-  sendJson(statusCode: number, body: unknown): void;
-  sendHtml(statusCode: number, body: string): void;
-  sendText(statusCode: number, body?: string): void;
-  sendBytes(statusCode: number, bytes: Uint8Array): void;
+  readRawBody(): Promise<Buffer>;
+  sendJson(statusCode: number, body: unknown, options?: { headers?: Record<string, string> }): void;
+  sendHtml(statusCode: number, body: string, options?: { headers?: Record<string, string> }): void;
+  sendText(statusCode: number, body?: string, options?: { headers?: Record<string, string> }): void;
+  sendBytes(
+    statusCode: number,
+    bytes: Uint8Array,
+    options?: { headers?: Record<string, string>; contentType?: string },
+  ): void;
   parseBearerToken(): string;
   matchPath(pathname: string, pattern: RegExp): RegExpMatchArray | null;
   splitScopes(raw: string | null): string[];

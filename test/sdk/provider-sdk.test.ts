@@ -114,6 +114,164 @@ describe('provider sdk surfaces', () => {
     expect(engine.listOutbox('gmail-drafts')).toHaveLength(1);
   });
 
+  it('supports Gmail message formats, thread resources, watch state, and provider-native import/insert flows', async () => {
+    const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+    engine.createMailbox({
+      id: 'gmail-fidelity',
+      provider: 'gmail',
+      primaryEmail: 'ops@example.com',
+    });
+    engine.appendMessage('gmail-fidelity', {
+      providerMessageId: 'thread-msg-1',
+      providerThreadId: 'thread-1',
+      from: 'shipper@example.com',
+      to: 'ops@example.com',
+      subject: 'Thread root',
+      bodyText: 'Plain body',
+      bodyHtml: '<p>Plain body</p>',
+      rawHeaders: {
+        'X-Test-Header': 'root',
+      },
+      attachments: [
+        {
+          providerAttachmentId: 'thread-att-1',
+          filename: 'root.pdf',
+          mimeType: 'application/pdf',
+          contentBytes: 'pdf-bytes',
+        },
+      ],
+    });
+    engine.appendMessage('gmail-fidelity', {
+      providerMessageId: 'thread-msg-2',
+      providerThreadId: 'thread-1',
+      from: 'carrier@example.com',
+      to: 'ops@example.com',
+      subject: 'Re: Thread root',
+      bodyText: 'Reply body',
+    });
+
+    const gmail = getGmailClientForMailbox(engine, 'gmail-fidelity');
+
+    const listed = await gmail.users.messages.list({
+      userId: 'me',
+      labelIds: ['Label_SU5CT1g'],
+    });
+    expect(listed.data.resultSizeEstimate).toBe(2);
+    expect(listed.data.messages).toEqual([
+      { id: 'thread-msg-2', threadId: 'thread-1' },
+      { id: 'thread-msg-1', threadId: 'thread-1' },
+    ]);
+
+    const minimal = await gmail.users.messages.get({
+      userId: 'me',
+      id: 'thread-msg-1',
+      format: 'minimal',
+    });
+    expect(minimal.data.payload).toBeUndefined();
+    expect(minimal.data.labelIds).toEqual(['Label_SU5CT1g']);
+
+    const metadata = await gmail.users.messages.get({
+      userId: 'me',
+      id: 'thread-msg-1',
+      format: 'metadata',
+      metadataHeaders: ['subject', 'x-test-header'],
+    });
+    expect(metadata.data.payload?.headers).toEqual([
+      { name: 'Subject', value: 'Thread root' },
+      { name: 'X-Test-Header', value: 'root' },
+    ]);
+    expect(metadata.data.payload?.parts).toEqual([
+      {
+        filename: 'root.pdf',
+        mimeType: 'application/pdf',
+        body: {
+          attachmentId: 'thread-att-1',
+          size: 9,
+        },
+      },
+    ]);
+
+    const raw = await gmail.users.messages.get({
+      userId: 'me',
+      id: 'thread-msg-1',
+      format: 'raw',
+    });
+    expect(Buffer.from(String(raw.data.raw || ''), 'base64url').toString('utf8')).toContain('Subject: Thread root');
+    expect(Buffer.from(String(raw.data.raw || ''), 'base64url').toString('utf8')).toContain('filename="root.pdf"');
+
+    const threads = await gmail.users.threads.list({
+      userId: 'me',
+    });
+    expect(threads.data.threads).toEqual([
+      expect.objectContaining({
+        id: 'thread-1',
+      }),
+    ]);
+
+    const thread = await gmail.users.threads.get({
+      userId: 'me',
+      id: 'thread-1',
+      format: 'metadata',
+      metadataHeaders: ['subject'],
+    });
+    expect(thread.data.messages).toHaveLength(2);
+    expect(thread.data.messages?.every((message) => message.payload?.headers?.length === 1)).toBe(true);
+
+    const watch = await gmail.users.watch({
+      userId: 'me',
+      requestBody: {
+        topicName: 'projects/email-connect/topics/gmail-watch',
+        labelIds: ['INBOX'],
+      },
+    });
+    expect(Number(watch.data.expiration || '0')).toBeGreaterThan(Date.parse('2026-04-20T00:00:00.000Z'));
+    expect(watch.data.historyId).toBeTruthy();
+
+    const stopped = await gmail.users.stop({
+      userId: 'me',
+    });
+    expect(stopped.data).toEqual({});
+
+    const imported = await gmail.users.messages.import({
+      userId: 'me',
+      requestBody: {
+        raw: encodeBase64Url(
+          [
+            'From: imported@example.com',
+            'To: ops@example.com',
+            'Date: Tue, 14 Apr 2026 09:00:00 +0000',
+            'Message-ID: <imported@example.com>',
+            'Subject: Imported mail',
+            '',
+            'Imported body',
+          ].join('\r\n'),
+        ),
+        internalDateSource: 'dateHeader',
+      },
+    });
+    expect(imported.data.internalDate).toBe(String(Date.parse('2026-04-14T09:00:00.000Z')));
+
+    await gmail.users.messages.insert({
+      userId: 'me',
+      requestBody: {
+        raw: encodeBase64Url(
+          [
+            'From: inserted@example.com',
+            'To: ops@example.com',
+            'Subject: Inserted and deleted',
+            '',
+            'Inserted body',
+          ].join('\r\n'),
+        ),
+        deleted: true,
+      },
+    });
+    const visibleAfterInsert = await gmail.users.messages.list({
+      userId: 'me',
+    });
+    expect(visibleAfterInsert.data.resultSizeEstimate).toBe(3);
+  });
+
   it('serves Outlook attachment fallback, reply drafts, and opaque delta links through the SDK facade', async () => {
     const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
     engine.createMailbox({
@@ -235,6 +393,205 @@ describe('provider sdk surfaces', () => {
     });
     await client.api(`/me/messages/${created.providerDraftId}`).header('Prefer', 'IdType="ImmutableId"').delete();
     expect(engine.snapshotMailbox('graph-microtms-shapes').drafts).toHaveLength(0);
+  });
+
+  it('supports Graph MIME reads, typed attachments, move/copy, direct sendMail, and upload sessions', async () => {
+    const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+    engine.createMailbox({
+      id: 'graph-fidelity',
+      provider: 'graph',
+      primaryEmail: 'dispatch@example.com',
+    });
+    engine.appendMessage('graph-fidelity', {
+      providerMessageId: 'graph-fidelity-msg',
+      providerThreadId: 'graph-fidelity-thread',
+      messageId: '<graph-fidelity-msg@email-connect.local>',
+      subject: 'Fidelity root',
+      from: 'shipper@example.com',
+      to: 'dispatch@example.com',
+      bodyHtml: '<p>Root <strong>HTML</strong></p>',
+      attachments: [
+        {
+          providerAttachmentId: 'graph-file-att',
+          filename: 'ratecon.pdf',
+          mimeType: 'application/pdf',
+          contentBytes: 'pdf-binary',
+        },
+        {
+          providerAttachmentId: 'graph-ref-att',
+          filename: 'Rate con link.url',
+          mimeType: 'application/octet-stream',
+          contentBytes: '',
+          attachmentType: 'reference',
+          sourceUrl: 'https://files.example.test/ratecon.pdf',
+        },
+        {
+          providerAttachmentId: 'graph-item-att',
+          filename: 'forwarded.eml',
+          mimeType: 'message/rfc822',
+          contentBytes: '',
+          attachmentType: 'item',
+          embeddedMessage: {
+            subject: 'Embedded update',
+            from: 'broker@example.com',
+            to: ['dispatch@example.com'],
+            bodyText: 'Embedded body',
+          },
+        },
+      ],
+    });
+
+    const { client } = getOutlookGraphClientForMailbox(engine, 'graph-fidelity');
+
+    const opened = await client
+      .api('/me/messages/graph-fidelity-msg?$select=id,body,parentFolderId')
+      .header('Prefer', 'outlook.body-content-type="text"')
+      .get();
+    expect(opened.body.contentType).toBe('text');
+    expect(opened.body.content).toContain('Root HTML');
+    expect(opened.parentFolderId).toBe('inbox');
+
+    const mime = await client.api('/me/messages/graph-fidelity-msg/$value').get();
+    expect(Buffer.from(mime).toString('utf8')).toContain('Subject: Fidelity root');
+    expect(Buffer.from(mime).toString('utf8')).toContain('filename="ratecon.pdf"');
+
+    const referenceAttachment = await client.api('/me/messages/graph-fidelity-msg/attachments/graph-ref-att').get();
+    expect(referenceAttachment['@odata.type']).toBe('#microsoft.graph.referenceAttachment');
+    expect(referenceAttachment.sourceUrl).toBe('https://files.example.test/ratecon.pdf');
+
+    const itemAttachment = await client.api('/me/messages/graph-fidelity-msg/attachments/graph-item-att').get();
+    expect(itemAttachment['@odata.type']).toBe('#microsoft.graph.itemAttachment');
+    expect(itemAttachment.item.subject).toBe('Embedded update');
+
+    await expect(client.api('/me/messages/graph-fidelity-msg/attachments/graph-ref-att/$value').get()).rejects.toThrow(
+      /\$value/i,
+    );
+
+    const moved = await client.api('/me/messages/graph-fidelity-msg/move').post({
+      destinationId: 'archive',
+    });
+    expect(moved.parentFolderId).toBe('archive');
+
+    const inboxAfterMove = await client.api('/me/mailFolders/inbox/messages?$top=10').get();
+    expect(inboxAfterMove.value.find((entry: { id: string }) => entry.id === 'graph-fidelity-msg')).toBeUndefined();
+
+    const copied = await client.api('/me/messages/graph-fidelity-msg/copy').post({
+      destinationId: 'inbox',
+    });
+    expect(copied.parentFolderId).toBe('inbox');
+    expect(copied.id).not.toBe('graph-fidelity-msg');
+
+    const draft = await client.api('/me/messages').post({
+      subject: 'Upload session draft',
+      toRecipients: [{ emailAddress: { address: 'carrier@example.com' } }],
+      body: { contentType: 'Text', content: 'Draft body' },
+    });
+    const uploadSession = await client.api(`/me/messages/${draft.id}/attachments/createUploadSession`).post({
+      AttachmentItem: {
+        attachmentType: 'file',
+        name: 'large.bin',
+        contentType: 'application/octet-stream',
+        size: 10,
+      },
+    });
+    expect(String(uploadSession.uploadUrl || '')).toContain('/__email-connect/upload/graph/');
+
+    const uploadFirst = await client
+      .api(String(uploadSession.uploadUrl))
+      .header('Content-Range', 'bytes 0-4/10')
+      .put(Buffer.from('12345'));
+    expect(uploadFirst.nextExpectedRanges).toEqual(['5-']);
+
+    const uploadDone = await client
+      .api(String(uploadSession.uploadUrl))
+      .header('Content-Range', 'bytes 5-9/10')
+      .put(Buffer.from('67890'));
+    expect(uploadDone.name).toBe('large.bin');
+    expect(uploadDone.contentBytes).toBeTruthy();
+
+    await client.api('/me/sendMail').post({
+      message: {
+        subject: 'JSON send',
+        toRecipients: [{ emailAddress: { address: 'json@example.com' } }],
+        body: { contentType: 'HTML', content: '<p>JSON body</p>' },
+        attachments: [
+          {
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            name: 'json.txt',
+            contentType: 'text/plain',
+            contentBytes: Buffer.from('json attachment').toString('base64'),
+          },
+        ],
+      },
+      saveToSentItems: true,
+    });
+
+    await client.api('/me/sendMail').post(
+      Buffer.from(
+        [
+          'To: mime@example.com',
+          'Subject: MIME send',
+          'MIME-Version: 1.0',
+          'Content-Type: multipart/mixed; boundary="mime-boundary"',
+          '',
+          '--mime-boundary',
+          'Content-Type: text/plain; charset="UTF-8"',
+          '',
+          'MIME plain body',
+          '--mime-boundary',
+          'Content-Type: text/plain; name="mime.txt"',
+          'Content-Transfer-Encoding: base64',
+          'Content-Disposition: attachment; filename="mime.txt"',
+          '',
+          Buffer.from('mime attachment').toString('base64'),
+          '--mime-boundary--',
+          '',
+        ].join('\r\n'),
+        'utf8',
+      ).toString('base64'),
+    );
+
+    expect(engine.listOutbox('graph-fidelity')).toMatchObject([
+      {
+        subject: 'JSON send',
+        bodyHtml: '<p>JSON body</p>',
+      },
+      {
+        subject: 'MIME send',
+        bodyText: 'MIME plain body',
+      },
+    ]);
+
+    const allMessages = await client.api('/me/messages?$top=20').get();
+    expect(allMessages.value.some((entry: { parentFolderId?: string; subject?: string }) => entry.subject === 'JSON send' && entry.parentFolderId === 'sentitems')).toBe(true);
+    expect(allMessages.value.some((entry: { subject?: string }) => entry.subject === 'MIME send')).toBe(true);
+  });
+
+  it('rejects out-of-order Graph upload chunks so large-attachment tests catch bad resumptions', async () => {
+    const engine = new EmailConnectEngine({ baseTime: '2026-04-14T12:00:00.000Z' });
+    engine.createMailbox({
+      id: 'graph-upload-errors',
+      provider: 'graph',
+      primaryEmail: 'dispatch@example.com',
+    });
+
+    const { client } = getOutlookGraphClientForMailbox(engine, 'graph-upload-errors');
+    const draft = await client.api('/me/messages').post({
+      subject: 'Bad upload',
+      toRecipients: [{ emailAddress: { address: 'carrier@example.com' } }],
+      body: { contentType: 'Text', content: 'Chunk me' },
+    });
+    const uploadSession = await client.api(`/me/messages/${draft.id}/attachments/createUploadSession`).post({
+      AttachmentItem: {
+        attachmentType: 'file',
+        name: 'bad.bin',
+        size: 6,
+      },
+    });
+
+    await expect(
+      client.api(String(uploadSession.uploadUrl)).header('Content-Range', 'bytes 2-5/6').put(Buffer.from('3456')),
+    ).rejects.toThrow(/next expected range/i);
   });
 
   it('preserves HTML-capable compose flows for Gmail direct send and Outlook draft send', async () => {

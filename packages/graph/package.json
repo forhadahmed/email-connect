@@ -2,14 +2,42 @@
   "name": "@email-connect/graph",
   "version": "0.1.0",
   "description": "Microsoft Graph provider package for email-connect.",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
+  },
+  "keywords": [
+    "email",
+    "graph",
+    "microsoft-graph",
+    "oauth",
+    "mock",
+    "simulation",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forhad/email-connect.git",
+    "directory": "packages/graph"
+  },
+  "bugs": {
+    "url": "https://github.com/forhad/email-connect/issues"
+  },
+  "homepage": "https://github.com/forhad/email-connect/tree/main/packages/graph#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@email-connect/core": "file:../core"

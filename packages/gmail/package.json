@@ -2,14 +2,41 @@
   "name": "@email-connect/gmail",
   "version": "0.1.0",
   "description": "Gmail provider package for email-connect.",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
+  },
+  "keywords": [
+    "email",
+    "gmail",
+    "oauth",
+    "mock",
+    "simulation",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forhad/email-connect.git",
+    "directory": "packages/gmail"
+  },
+  "bugs": {
+    "url": "https://github.com/forhad/email-connect/issues"
+  },
+  "homepage": "https://github.com/forhad/email-connect/tree/main/packages/gmail#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@email-connect/core": "file:../core"
