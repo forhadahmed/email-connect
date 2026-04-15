@@ -216,6 +216,8 @@ function initialMailboxAuth(input: CreateMailboxInput, accessToken: string): Mai
   };
 }
 
+// Engine options define the initial deterministic clock and installed provider
+// packages for a test harness instance.
 export type EmailConnectEngineOptions = {
   baseTime?: string | Date;
   providers?: EmailConnectProvider[];

@@ -13,6 +13,8 @@ import type {
 } from './service.js';
 import { GmailService } from './service.js';
 
+// GmailClient mirrors the nested `users.*` surface commonly used by Google API
+// clients while still delegating every operation to the canonical mock service.
 export type GmailClient = {
   users: {
     getProfile(params: { userId: string }): Promise<GmailApiResponse<GmailProfile>>;

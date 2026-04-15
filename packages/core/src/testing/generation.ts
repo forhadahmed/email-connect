@@ -2,6 +2,8 @@ import type { AttachmentSeed, MessageSeed, ProviderKind } from '../types.js';
 import { EmailConnectEngine } from '../engine/email-connect-engine.js';
 import { SeededRandom } from '../utils/rng.js';
 
+// Profiles are workload presets for inbox tempo: small quiet mailboxes, steady
+// operational inboxes, high-volume inboxes, and clustered burst traffic.
 export type MailboxEmailProfile = 'quiet' | 'steady' | 'busy' | 'bursty';
 
 // Threaded generated messages should preserve existing reply prefixes rather
@@ -20,6 +22,8 @@ export type GeneratedTemplate = Omit<
   attachments?: AttachmentSeed[];
 };
 
+// Template context exposes generation position, thread shape, and deterministic
+// randomness so callback templates can build realistic domain mail.
 export type TemplateRequestContext = {
   mailboxId: string;
   provider: ProviderKind;
@@ -31,6 +35,7 @@ export type TemplateRequestContext = {
   random: SeededRandom;
 };
 
+// Template sources are the pluggable content plane for generated mailboxes.
 export interface MessageTemplateSource {
   nextTemplate(context: TemplateRequestContext): Promise<GeneratedTemplate> | GeneratedTemplate;
 }
@@ -96,6 +101,8 @@ type ThreadState = {
   lastFrom: string | null;
 };
 
+// Email generation plans combine mailbox target, volume, timing, conversation
+// density, participants, and optional attachment generation.
 export type EmailGenerationPlan = {
   mailboxId: string;
   count: number;

@@ -38,6 +38,8 @@ export type EmailConnectProviderConnectSemantics = {
   idTokenIssuer(mailbox: MailboxRecord): string;
 };
 
+// Route context is the small HTTP host API that provider packages receive. It
+// gives providers request utilities without coupling them to server internals.
 export type EmailConnectHttpRouteContext = {
   engine: EmailConnectEngine;
   method: string;
@@ -63,10 +65,14 @@ export type EmailConnectHttpRouteContext = {
   respondWithTokenGrant(issueGrant: () => OAuthTokenGrant): Promise<void>;
 };
 
+// Provider HTTP handlers return true only when they fully handled the request;
+// this lets the host try installed providers without a framework router.
 export type EmailConnectProviderHttp = {
   handle(context: EmailConnectHttpRouteContext): Promise<boolean>;
 };
 
+// A provider package is the unit of sellable/installable behavior: connect
+// semantics plus optional black-box HTTP routes for that provider.
 export type EmailConnectProvider = {
   id: ProviderKind;
   connect: EmailConnectProviderConnectSemantics;

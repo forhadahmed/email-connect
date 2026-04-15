@@ -9,8 +9,12 @@ import {
 } from '@email-connect/core';
 import type { MailboxChange, MailboxMessage, MailboxRecord } from '@email-connect/core';
 
+// Gmail client libraries wrap resources under a `data` property; preserving
+// that shape keeps white-box tests close to real Google client code.
 export type GmailApiResponse<T> = { data: T };
 
+// Gmail profile is the lightweight mailbox identity plus sync watermarks used
+// by clients before starting history reads.
 export type GmailProfile = {
   emailAddress?: string;
   historyId?: string;
@@ -18,22 +22,29 @@ export type GmailProfile = {
   threadsTotal?: number;
 };
 
+// Gmail labels expose provider ids and display names separately, including
+// system labels and mock custom labels.
 export type GmailLabel = {
   id?: string;
   name?: string;
 };
 
+// List endpoints return message references first; callers fetch full resources
+// through `messages.get`.
 export type GmailMessageRef = {
   id?: string;
   threadId?: string;
 };
 
+// Thread list entries mirror Gmail's compact thread reference shape.
 export type GmailThreadRef = {
   id?: string;
   historyId?: string;
   snippet?: string;
 };
 
+// History records are intentionally Gmail-shaped event buckets derived from the
+// engine's canonical change log.
 export type GmailHistoryRecord = {
   messages?: GmailMessageRef[];
   messagesAdded?: Array<{ message?: GmailMessageRef }>;
@@ -42,11 +53,15 @@ export type GmailHistoryRecord = {
   labelsRemoved?: Array<{ message?: GmailMessageRef; labelIds?: string[] }>;
 };
 
+// Gmail payload headers preserve provider casing and ordering for metadata
+// reads and full payload projections.
 export type GmailMessagePayloadHeader = {
   name?: string;
   value?: string;
 };
 
+// Gmail payloads model the recursive MIME tree returned by `format=full` and
+// `format=metadata`.
 export type GmailMessagePayload = {
   mimeType?: string;
   headers?: GmailMessagePayloadHeader[];
@@ -55,6 +70,8 @@ export type GmailMessagePayload = {
   parts?: GmailMessagePayload[];
 };
 
+// Gmail messages are the provider-facing projection of canonical mailbox
+// messages, including format-specific payload/raw fields.
 export type GmailMessage = {
   id?: string;
   threadId?: string;
@@ -67,6 +84,7 @@ export type GmailMessage = {
   raw?: string;
 };
 
+// Thread resources bundle Gmail message projections under one conversation id.
 export type GmailThread = {
   id?: string;
   historyId?: string;
@@ -74,11 +92,15 @@ export type GmailThread = {
   messages?: GmailMessage[];
 };
 
+// Watch responses expose the bootstrap history id and expiration timestamp
+// Gmail clients need after creating a watch.
 export type GmailWatchResponse = {
   historyId?: string;
   expiration?: string;
 };
 
+// Gmail message format controls whether callers receive refs, headers, payload
+// bodies, or raw RFC822 content.
 export type GmailMessageFormat = 'minimal' | 'full' | 'raw' | 'metadata';
 
 type GmailWatchState = {

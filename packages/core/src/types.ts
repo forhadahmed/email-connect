@@ -1,13 +1,28 @@
+// Provider ids are strings so core can host Gmail, Graph, or future provider
+// packages without changing the engine type model.
 export type ProviderKind = string;
+
+// Capability mode is the high-level product intent used to choose default
+// provider scopes during mailbox connection.
 export type ConnectCapabilityMode = 'read' | 'send';
+
+// Consent mode controls how the mock OAuth screen resolves in black-box flows.
 export type ConnectConsentMode = 'auto_approve' | 'interactive' | 'auto_deny';
+
+// Token failure modes model OAuth endpoint failures separately from mail-plane
+// provider failures.
 export type ConnectTokenFailureMode =
   | 'invalid_client'
   | 'invalid_grant'
   | 'invalid_scope'
   | 'temporarily_unavailable';
 
+// Mail-plane failure modes model common provider/runtime failures that sync and
+// send code should handle explicitly.
 export type FailureMode = '429' | '503' | 'timeout' | 'disconnect';
+
+// Auth failure modes are operation-level denials after a request reaches a mail
+// provider facade.
 export type AuthFailureMode = 'invalid_grant' | 'forbidden';
 
 /**
@@ -60,6 +75,11 @@ export type ConnectBackendConfig = {
   refreshTokenTtlSec?: number;
 };
 
+/**
+ * The combined backend config is mailbox-local and provider-aware. A Gmail-only
+ * mailbox can ignore Graph knobs and vice versa while sharing the same scenario
+ * schema.
+ */
 export type MailboxBackendConfig = GmailBackendConfig &
   GraphBackendConfig & {
     connect?: ConnectBackendConfig;
@@ -81,14 +101,20 @@ export type MailboxAuthSeed = {
   lastConsentAt?: string | Date | null;
 };
 
+// Address inputs stay flexible at seed boundaries because examples and SDK
+// helpers naturally supply either one string or an array of recipients.
 export type MessageAddressLike =
   | string
   | string[]
   | null
   | undefined;
 
+// Attachment families map to Graph's richer attachment model while Gmail simply
+// projects non-file types through metadata where needed.
 export type MailAttachmentType = 'file' | 'item' | 'reference';
 
+// Header maps preserve caller-provided header names and values before provider
+// projections decide how to expose or filter them.
 export type HeaderMap = Record<string, string>;
 
 /**
@@ -160,6 +186,8 @@ export type DraftSeed = {
   attachments?: AttachmentSeed[];
 };
 
+// Change kinds are deliberately small because Gmail history and Graph delta are
+// built from this canonical set.
 export type MailboxChangeKind = 'message_added' | 'message_replayed' | 'label_changed' | 'message_deleted';
 
 /**
@@ -201,6 +229,8 @@ export type MailboxAttachment = {
   } | null;
 };
 
+// A mailbox message is the fully normalized in-memory form of received/imported
+// mail after provider-neutral seeding has been materialized.
 export type MailboxMessage = {
   rowId: number;
   providerMessageId: string;
@@ -221,6 +251,8 @@ export type MailboxMessage = {
   attachments: MailboxAttachment[];
 };
 
+// Drafts are stored separately from visible mailbox messages so compose/send
+// flows can be tested without pretending drafts are received mail.
 export type MailboxDraft = {
   providerDraftId: string;
   providerDraftMessageId: string | null;
@@ -232,6 +264,8 @@ export type MailboxDraft = {
   attachments: MailboxAttachment[];
 };
 
+// Outbox entries are the durable send-observation surface shared by Gmail and
+// Graph, regardless of whether a provider also materializes sent items.
 export type OutboxMessage = {
   id: string;
   provider: ProviderKind;
@@ -278,6 +312,8 @@ export type OAuthClientInput = {
   allowPkce?: boolean;
 };
 
+// Client registrations are the validated, persisted form of OAuth clients used
+// by authorization and token exchange flows.
 export type OAuthClientRegistration = {
   id: string;
   provider: ProviderKind;
@@ -310,6 +346,8 @@ export type AuthorizationRequestInput = {
   mailboxId?: string | null;
 };
 
+// Authorization request snapshots are safe to expose through control APIs while
+// the connect plane keeps the mutable state machine private.
 export type AuthorizationRequestSnapshot = {
   id: string;
   provider: ProviderKind;
@@ -350,6 +388,8 @@ export type MailboxAuthSnapshot = {
   lastConsentAt: string | null;
 };
 
+// Auth records are the internal form of mailbox grants, including raw refresh
+// token material that snapshots intentionally hide.
 export type MailboxAuthRecord = {
   clientId: string | null;
   grantedScopes: string[];
@@ -380,6 +420,8 @@ export type OAuthTokenGrant = {
   idToken?: string;
 };
 
+// Provider endpoint URLs are returned to consumers after package composition so
+// black-box clients can configure against the mock just like real providers.
 export type ProviderEndpointUrls = {
   authorizeUrl: string;
   tokenUrl: string;
@@ -388,6 +430,8 @@ export type ProviderEndpointUrls = {
   graphMeUrl?: string;
 };
 
+// Scenario mailbox input currently aliases direct mailbox creation. Keeping the
+// alias gives scenario files their own public vocabulary.
 export type ScenarioMailboxInput = CreateMailboxInput;
 
 /**
@@ -399,6 +443,8 @@ export type ScenarioDefinition = {
   mailboxes: ScenarioMailboxInput[];
 };
 
+// Mailbox snapshots are cloned readback views for control-plane and SDK
+// inspection; callers should not receive live engine records.
 export type MailboxSnapshot = {
   id: string;
   alias: string | null;
@@ -414,6 +460,8 @@ export type MailboxSnapshot = {
   changes: MailboxChange[];
 };
 
+// Mailbox records are engine-owned mutable state and include runtime budgets
+// that should never be serialized as public snapshots.
 export type MailboxRecord = Omit<MailboxSnapshot, 'auth'> & {
   auth: MailboxAuthRecord;
   failureBudget: {
@@ -422,6 +470,8 @@ export type MailboxRecord = Omit<MailboxSnapshot, 'auth'> & {
   };
 };
 
+// Mailbox creation returns the identifiers and bearer token needed to exercise
+// either white-box SDK calls or black-box HTTP provider calls immediately.
 export type CreateMailboxResult = {
   mailboxId: string;
   alias: string | null;

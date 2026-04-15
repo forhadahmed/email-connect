@@ -1,5 +1,7 @@
 import { decodeBase64Url, decodeBase64ToBytes, decodeBase64UrlToBytes } from './base64.js';
 
+// Parsed raw mail is the normalized bridge from RFC822-ish provider inputs into
+// the engine's provider-neutral message model.
 export type ParsedRawEmail = {
   from: string | null;
   to: string | null;
@@ -14,6 +16,8 @@ export type ParsedRawEmail = {
   attachments: RawEmailAttachmentPart[];
 };
 
+// Attachment parts are the subset of MIME metadata that provider mocks expose
+// through Gmail attachments, Graph attachments, and raw message round-trips.
 export type RawEmailAttachmentPart = {
   filename: string;
   mimeType: string;
@@ -22,6 +26,8 @@ export type RawEmailAttachmentPart = {
   contentId?: string | null;
 };
 
+// Raw email rendering input mirrors canonical message fields so Gmail `raw` and
+// Graph `$value` can be generated from one shared utility.
 export type RawEmailRenderInput = {
   from?: string | null;
   to?: string | null;

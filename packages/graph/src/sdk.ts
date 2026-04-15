@@ -1,6 +1,8 @@
 import { EmailConnectEngine, decodeBase64ToBytes } from '@email-connect/core';
 import { GraphService, parsePreferBodyContentType } from './service.js';
 
+// GraphRequestLike mirrors the path builder returned by Microsoft Graph client
+// libraries closely enough for product code to exercise realistic call chains.
 export type GraphRequestLike = {
   header(name: string, value: string): GraphRequestLike;
   get(): Promise<any>;
@@ -10,6 +12,8 @@ export type GraphRequestLike = {
   delete(): Promise<void>;
 };
 
+// OutlookGraphClientLike is the minimal `.api(path)` surface consumers need for
+// white-box tests without pulling in the real Microsoft SDK.
 export type OutlookGraphClientLike = {
   api(path: string): GraphRequestLike;
 };
