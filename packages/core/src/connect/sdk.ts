@@ -4,7 +4,7 @@ import type {
   OAuthClientInput,
   OAuthTokenGrant,
   ProviderKind,
-} from '../core/types.js';
+} from '../types.js';
 import { EmailConnectEngine } from '../engine/email-connect-engine.js';
 
 /**

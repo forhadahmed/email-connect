@@ -600,6 +600,8 @@ export class GraphService {
     baseUrl: string,
     options?: GraphBodyOptions,
   ) {
+    // `/me/messages` spans the mailbox, not just inbox. Folder placement still
+    // matters because Graph surfaces parent folder ids on each returned item.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -642,6 +644,9 @@ export class GraphService {
     baseUrl: string,
     options?: GraphBodyOptions,
   ) {
+    // Inbox listing is a projection over the shared mailbox state plus the
+    // Graph-owned folder runtime. That separation is why move/copy can affect
+    // inbox reads without rewriting canonical messages.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -846,6 +851,8 @@ export class GraphService {
   }
 
   async listAttachmentsPage(mailboxId: string, providerMessageId: string, path: string, baseUrl: string) {
+    // Attachment listing paginates over the resolved container so drafts and
+    // sent/received messages share one attachment surface.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -869,6 +876,9 @@ export class GraphService {
   }
 
   async getAttachment(mailboxId: string, providerMessageId: string, attachmentId: string, options?: GraphBodyOptions) {
+    // Graph sometimes omits `contentBytes` on attachment reads. Preserve that
+    // backend-config seam because real clients often have fallback logic for
+    // `$value` downloads.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -896,6 +906,9 @@ export class GraphService {
   }
 
   async createReplyDraft(mailboxId: string, providerMessageId: string) {
+    // Reply drafts inherit thread identity and flip the directionality of the
+    // original message, which is the part many downstream compose flows care
+    // about more than exact quoted-body rendering.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.createReply.post');
@@ -919,6 +932,8 @@ export class GraphService {
   }
 
   async createDraft(mailboxId: string, body: Record<string, unknown>) {
+    // Draft creation accepts Graph resource-shaped JSON and normalizes it into
+    // the shared draft model so later patch/send/upload flows stay uniform.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.messages.post');
@@ -940,6 +955,8 @@ export class GraphService {
   }
 
   async patchDraft(mailboxId: string, providerDraftId: string, body: Record<string, unknown>) {
+    // Patch only updates the mutable compose fields Graph exposes through this
+    // route; attachment upload stays on the dedicated upload-session path.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'graph.message.patch');
@@ -1017,6 +1034,9 @@ export class GraphService {
   }
 
   async moveMessage(mailboxId: string, providerMessageId: string, destinationId: string, options?: GraphBodyOptions) {
+    // Move changes Graph folder projection without cloning the canonical
+    // message, which matches how Graph exposes the same logical item in a new
+    // folder rather than creating a second message.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1033,6 +1053,9 @@ export class GraphService {
   }
 
   async copyMessage(mailboxId: string, providerMessageId: string, destinationId: string, options?: GraphBodyOptions) {
+    // Copy intentionally materializes a second canonical message because Graph
+    // returns a distinct resource in the destination folder, not just a folder
+    // projection change.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);
@@ -1198,6 +1221,8 @@ export class GraphService {
   }
 
   async deleteMessageResource(mailboxId: string, providerMessageId: string) {
+    // Graph DELETE applies to both drafts and messages depending on the id, so
+    // resolve drafts first and then fall through to message deletion.
     const mailbox = this.engine.requireMailbox(mailboxId);
     graphMailboxRuntime(this.engine, mailbox);
     await this.engine.maybeDelay(mailbox);

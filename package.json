@@ -41,12 +41,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/forhad/email-connect.git"
+    "url": "git+https://github.com/forhadahmed/email-connect.git"
   },
   "bugs": {
-    "url": "https://github.com/forhad/email-connect/issues"
+    "url": "https://github.com/forhadahmed/email-connect/issues"
   },
-  "homepage": "https://github.com/forhad/email-connect#readme",
+  "homepage": "https://github.com/forhadahmed/email-connect#readme",
   "publishConfig": {
     "access": "public"
   },

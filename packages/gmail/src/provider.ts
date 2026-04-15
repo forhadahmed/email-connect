@@ -150,6 +150,8 @@ export const gmailProvider: EmailConnectProvider = {
 
       // Gmail facade routes mirror the official REST hierarchy: profile/labels,
       // message resources, thread resources, history, compose, and watch.
+      // Read routes come first because most consumers start by listing and then
+      // fetching concrete resources before they move into mutation flows.
       if (method === 'GET' && pathname === '/gmail/v1/users/me/profile') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.profile.get');
         context.sendJson(200, (await service.getProfile(mailbox.id)).data);
@@ -270,6 +272,8 @@ export const gmailProvider: EmailConnectProvider = {
         return true;
       }
 
+      // Compose and mailbox-control routes are kept after the read surfaces so
+      // the file matches the mental model of "connect, read, then mutate/watch".
       if (method === 'POST' && pathname === '/gmail/v1/users/me/watch') {
         const mailbox = context.engine.connect.authorizeMailboxAccess('gmail', accessToken, 'gmail.watch.create');
         context.sendJson(200, (await service.watchMailbox(mailbox.id, await context.readJsonBody())).data);

@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { EmailConnectError, UnauthorizedError } from '../../core/errors.js';
+import { EmailConnectError, UnauthorizedError } from '../../errors.js';
 import { EmailConnectEngine } from '../../engine/email-connect-engine.js';
 import type { EmailConnectHttpRouteContext } from '../../provider.js';
 import { loadScenario } from '../../control/scenario.js';
-import type { AuthorizationRequestSnapshot, ConnectConsentMode, OAuthClientInput, ProviderKind } from '../../core/types.js';
+import type { AuthorizationRequestSnapshot, ConnectConsentMode, OAuthClientInput, ProviderKind } from '../../types.js';
 import {
   createArrayTemplateSource,
   createCallbackTemplateSource,
@@ -307,6 +307,9 @@ export class EmailConnectHttpServer {
   }
 
   private async handleControl(method: string, pathname: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Control routes intentionally stay provider-neutral. They are the operator
+    // surface for seeding, inspection, and fault injection regardless of which
+    // mock provider packages are installed.
     if (method === 'GET' && pathname === '/__email-connect/v1/mailboxes') {
       sendJson(res, 200, {
         data: this.engine.listMailboxes(),
@@ -359,6 +362,8 @@ export class EmailConnectHttpServer {
       return;
     }
 
+    // Client registration and authorization-request inspection let black-box
+    // tests drive the connect plane without falling back to white-box helpers.
     if (method === 'POST' && pathname === '/__email-connect/v1/connect/clients') {
       const body = await readJsonBody(req);
       const created = this.engine.connect.registerClient(body as OAuthClientInput);
@@ -406,6 +411,8 @@ export class EmailConnectHttpServer {
       return;
     }
 
+    // Mailbox mutation routes are intentionally direct and low-level: they are
+    // for scenario construction and adversarial test setup, not end-user UX.
     const backendMatch = matchPath(pathname, /^\/__email-connect\/v1\/mailboxes\/([^/]+)\/backend$/);
     if (method === 'PATCH' && backendMatch?.[1]) {
       const body = await readJsonBody(req);
@@ -502,6 +509,8 @@ export class EmailConnectHttpServer {
   }
 
   private async handleConsentAction(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // This form POST is only for the minimal interactive consent page above.
+    // Programmatic black-box tests should prefer the JSON control-plane routes.
     const body = await readFormBody(req);
     const requestId = String(body.request_id || '').trim();
     const decision = String(body.decision || '').trim().toLowerCase();
@@ -529,6 +538,9 @@ export class EmailConnectHttpServer {
     request: AuthorizationRequestSnapshot,
     res: ServerResponse,
   ): Promise<void> {
+    // Consent resolution stays centralized because browser-driven connect flows
+    // need one place that applies auto-approve, auto-deny, and mailbox-picking
+    // rules before redirecting back to the client app.
     const providerMailboxesFull = this.engine.listMailboxes().filter((mailbox) => mailbox.provider === provider);
     const providerMailboxes = providerMailboxesFull.map((mailbox) => ({
       id: mailbox.id,
@@ -582,6 +594,8 @@ export class EmailConnectHttpServer {
     }>,
     request: AuthorizationRequestSnapshot,
   ): ConnectConsentMode {
+    // Request-local settings win first; then login-hint or single-mailbox
+    // heuristics can auto-resolve consent for lightweight browser flows.
     const direct = request.mailboxId ? mailboxes.find((mailbox) => mailbox.id === request.mailboxId) : null;
     if (direct?.backend.connect?.consentMode) return direct.backend.connect.consentMode;
 
@@ -612,6 +626,8 @@ export class EmailConnectHttpServer {
     res: ServerResponse,
     issueGrant: () => ReturnType<EmailConnectEngine['connect']['exchangeAuthorizationCode']>,
   ): Promise<void> {
+    // Provider token endpoints all converge here so JSON token payloads and
+    // OAuth-style error mapping stay consistent across Gmail and Graph.
     try {
       const grant = issueGrant();
       sendJson(res, 200, {
@@ -632,6 +648,8 @@ export class EmailConnectHttpServer {
     statusCode: number;
     body: { error: string; error_description: string };
   } {
+    // Core raises typed errors, but token endpoints need provider-shaped OAuth
+    // payloads instead of generic application exceptions.
     const message = error instanceof Error ? error.message : String(error);
     const lower = message.toLowerCase();
     if (lower.includes('temporarily_unavailable')) {

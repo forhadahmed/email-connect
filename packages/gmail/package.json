@@ -28,13 +28,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/forhad/email-connect.git",
+    "url": "git+https://github.com/forhadahmed/email-connect.git",
     "directory": "packages/gmail"
   },
   "bugs": {
-    "url": "https://github.com/forhad/email-connect/issues"
+    "url": "https://github.com/forhadahmed/email-connect/issues"
   },
-  "homepage": "https://github.com/forhad/email-connect/tree/main/packages/gmail#readme",
+  "homepage": "https://github.com/forhadahmed/email-connect/tree/main/packages/gmail#readme",
   "publishConfig": {
     "access": "public"
   },

@@ -6,7 +6,7 @@ import type {
   OAuthTokenGrant,
   ProviderEndpointUrls,
   ProviderKind,
-} from './core/types.js';
+} from './types.js';
 import type { EmailConnectEngine } from './engine/email-connect-engine.js';
 
 /**

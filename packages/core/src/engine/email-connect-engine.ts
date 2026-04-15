@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, UnauthorizedError } from '../core/errors.js';
+import { ConflictError, NotFoundError, UnauthorizedError } from '../errors.js';
 import type {
   AttachmentSeed,
   CreateMailboxInput,
@@ -15,7 +15,7 @@ import type {
   MessageSeed,
   OutboxMessage,
   ScenarioDefinition,
-} from '../core/types.js';
+} from '../types.js';
 import { EmailConnectConnectPlane } from '../connect/plane.js';
 import type { EmailConnectProvider } from '../provider.js';
 import { bytesFromUnknown } from '../utils/base64.js';

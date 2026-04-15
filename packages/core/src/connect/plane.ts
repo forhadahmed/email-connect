@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { ConflictError, NotFoundError, UnauthorizedError } from '../core/errors.js';
+import { ConflictError, NotFoundError, UnauthorizedError } from '../errors.js';
 import type {
   AuthorizationRequestInput,
   AuthorizationRequestSnapshot,
@@ -12,7 +12,7 @@ import type {
   OAuthTokenGrant,
   ProviderEndpointUrls,
   ProviderKind,
-} from '../core/types.js';
+} from '../types.js';
 import type { EmailConnectEngine } from '../engine/email-connect-engine.js';
 
 type AuthorizationCodeRecord = {

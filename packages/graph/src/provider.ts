@@ -126,6 +126,9 @@ export const graphProvider: EmailConnectProvider = {
       const accessToken = pathname.startsWith('/graph/v1.0/') ? context.parseBearerToken() : null;
 
       if (method === 'PUT' && pathname.startsWith('/__email-connect/upload/graph/')) {
+        // Upload-session PUTs are provider-specific but sit outside `/graph/v1.0`
+        // because Graph returns opaque upload URLs rather than normal resource
+        // routes. Handle them before bearer-token routing.
         const outcome = await service.uploadAttachmentChunk(
           `${pathname}${url.search}`,
           await context.readRawBody(),
@@ -188,6 +191,8 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
+      // Message and attachment resource routes are grouped ahead of compose so
+      // the file follows the same read-first flow most Graph consumers do.
       const messageMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)$/);
       if (method === 'GET' && messageMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.message.get');
@@ -266,6 +271,8 @@ export const graphProvider: EmailConnectProvider = {
         return true;
       }
 
+      // Compose and mailbox-mutation routes come after reads and downloads so
+      // the route binder mirrors the usual client lifecycle.
       const createReplyMatch = context.matchPath(pathname, /^\/graph\/v1\.0\/me\/messages\/([^/]+)\/createReply$/);
       if (method === 'POST' && createReplyMatch?.[1]) {
         const mailbox = context.engine.connect.authorizeMailboxAccess('graph', accessToken, 'graph.reply.create');

@@ -504,6 +504,8 @@ export class GmailService {
     maxResults?: number;
     pageToken?: string;
   }): Promise<GmailApiResponse<{ messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
+    // `messages.list` intentionally returns lightweight references. Consumers
+    // that need bodies or headers should follow up with `messages.get`.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.list');
@@ -538,6 +540,8 @@ export class GmailService {
     maxResults?: number;
     pageToken?: string;
   }): Promise<GmailApiResponse<{ threads?: GmailThreadRef[]; nextPageToken?: string; resultSizeEstimate?: number }>> {
+    // Threads are grouped from canonical messages at read time so replay,
+    // deletes, and imported historical mail all feed the same thread view.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.list');
@@ -578,6 +582,8 @@ export class GmailService {
     providerMessageId: string,
     options?: { format?: string; metadataHeaders?: string[] },
   ): Promise<GmailApiResponse<GmailMessage>> {
+    // `getMessage` is where the chosen Gmail format is finally projected from
+    // canonical mailbox state into the provider-specific payload shape.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.messages.get');
@@ -598,6 +604,8 @@ export class GmailService {
     providerThreadId: string,
     options?: { format?: string; metadataHeaders?: string[] },
   ): Promise<GmailApiResponse<GmailThread>> {
+    // Thread reads intentionally reuse the same message projection rules as
+    // message reads so `format` and `metadataHeaders` behave consistently.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.threads.get');
@@ -637,6 +645,9 @@ export class GmailService {
     pageToken?: string;
     historyTypes?: string[];
   }): Promise<GmailApiResponse<{ historyId?: string; nextPageToken?: string; history?: GmailHistoryRecord[] }>> {
+    // Gmail history is derived from canonical change rows and then expanded into
+    // Gmail-style event arrays. That keeps replay and stale-cursor tests rooted
+    // in one source of truth.
     const mailbox = this.engine.requireMailbox(mailboxId);
     await this.engine.maybeDelay(mailbox);
     this.engine.maybeThrowInjectedFailure(mailbox, 'gmail.history.list');

@@ -1,4 +1,4 @@
-import type { CreateMailboxResult, ScenarioDefinition } from '../core/types.js';
+import type { CreateMailboxResult, ScenarioDefinition } from '../types.js';
 import { EmailConnectEngine } from '../engine/email-connect-engine.js';
 
 export function loadScenario(engine: EmailConnectEngine, definition: ScenarioDefinition): CreateMailboxResult[] {

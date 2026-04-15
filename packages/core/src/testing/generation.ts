@@ -1,4 +1,4 @@
-import type { AttachmentSeed, MessageSeed, ProviderKind } from '../core/types.js';
+import type { AttachmentSeed, MessageSeed, ProviderKind } from '../types.js';
 import { EmailConnectEngine } from '../engine/email-connect-engine.js';
 import { SeededRandom } from '../utils/rng.js';
 
