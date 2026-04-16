@@ -91,9 +91,6 @@ engine.createMailbox({
 const gmail = getGmailClientForMailbox(engine, 'ops');
 ```
 
-The longer-term product roadmap for taking this from the current strong
-foundation to a polished external 10/10 offering lives in [TODO.md](./TODO.md).
-
 The packaging and compatibility rules for the public API live in
 [VERSIONING.md](./VERSIONING.md), and the release checklist for the package
 family lives in [RELEASING.md](./RELEASING.md).
@@ -131,11 +128,13 @@ This repository starts with:
 - consumer-facing white-box and black-box examples under [examples/](./examples/README.md)
 
 Further fidelity work should extend provider semantics rather than bolt on test-only one-offs.
+Planned work continues to deepen provider realism around webhook or push
+delivery, subscription lifecycle behavior, and richer connect-plane flows.
 
 ## Current Provider Fidelity
 
-The current mail-plane implementation covers the seams that a consumer like
-`microtms-next` actually exercises today:
+The current mail-plane implementation covers the seams that mailbox-sync and
+mailbox-connect backends typically need:
 
 - Gmail:
   - OAuth `/authorize`, `/token`, `/revoke`, and OIDC-style `userinfo`
@@ -204,8 +203,8 @@ Operation filters intentionally accept both:
 - provider-qualified names such as `gmail.history.list`
 - consumer-friendly names such as `history.list`
 
-That keeps the public harness ergonomic while staying compatible with the
-operation naming patterns already used in `microtms-next`.
+That keeps the public harness ergonomic while supporting both provider-qualified
+and shorter operation naming styles.
 
 ## Connect Plane Notes
 
@@ -218,7 +217,7 @@ That means:
 - mailbox grant state is linked to the simulated mail plane
 - app-local session behavior is still out of scope
 
-For a consumer like `microtms-next`, that is the intended split:
+For a consuming application, that is the intended split:
 
 - `email-connect` owns provider `/authorize`, consent, code exchange, token
   refresh, revoke, and mailbox capability effects

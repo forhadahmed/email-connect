@@ -61,6 +61,6 @@ const gmail = getGmailClientForMailbox(engine, 'ops');
 If behavior exists only because Gmail or Microsoft Graph differs, it should live
 in the provider package rather than in `core`.
 
-For the broader product roadmap and packaging policy, see the root
-[README](../../README.md), [VERSIONING.md](../../VERSIONING.md), and
+For the combined package overview and the public package-family rules, see the
+root [README](../../README.md), [VERSIONING.md](../../VERSIONING.md), and
 [RELEASING.md](../../RELEASING.md).

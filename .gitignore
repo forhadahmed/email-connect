@@ -11,6 +11,8 @@ coverage/
 .vitest/
 .npm/
 *.log
+TODO.md
+.todo/
 
 # Common local editor and OS noise.
 .DS_Store

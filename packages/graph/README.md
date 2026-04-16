@@ -56,6 +56,6 @@ This package owns Graph-specific semantics only:
 It depends on `@email-connect/core` for the provider-neutral engine and control
 plane.
 
-For the broader product roadmap and packaging policy, see the root
-[README](../../README.md), [VERSIONING.md](../../VERSIONING.md), and
+For the combined package overview and the public package-family rules, see the
+root [README](../../README.md), [VERSIONING.md](../../VERSIONING.md), and
 [RELEASING.md](../../RELEASING.md).

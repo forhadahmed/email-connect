@@ -13,13 +13,14 @@ const packages = [
       'package.json',
       'README.md',
       'LICENSE',
-      'TODO.md',
       'VERSIONING.md',
       'RELEASING.md',
       'dist/index.js',
       'dist/index.d.ts',
-      'dist/server/index.js',
+      'dist/server.js',
+      'dist/server.d.ts',
     ],
+    forbidden: ['dist/server/index.js', 'dist/server/index.d.ts'],
   },
   {
     name: '@email-connect/core',
@@ -52,6 +53,10 @@ for (const pkg of packages) {
 
   for (const required of pkg.required) {
     assert(entrySet.has(required), `${pkg.name} tarball is missing required file: ${required}`);
+  }
+
+  for (const forbidden of pkg.forbidden || []) {
+    assert(!entrySet.has(forbidden), `${pkg.name} tarball includes stale file: ${forbidden}`);
   }
 
   for (const entry of entries) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { EmailConnectHttpServer } from '../../src/server/index.js';
+import { EmailConnectHttpServer } from '../../src/server.js';
 
 async function jsonFetch(url: string, init?: RequestInit) {
   const response = await fetch(url, init);

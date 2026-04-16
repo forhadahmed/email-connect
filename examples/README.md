@@ -15,7 +15,7 @@ The examples intentionally use the public package surfaces:
 - Graph examples import from `@email-connect/graph`
 - shared generation examples import from `@email-connect/core` plus an explicit provider package
 
-That mirrors how a real consumer would buy and compose the project.
+That mirrors how a real consumer would install and compose the project.
 
 ## White-Box SDK Matrix
 
