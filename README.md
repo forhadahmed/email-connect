@@ -13,7 +13,6 @@ It is designed to serve two equally important use cases from one canonical behav
 - One behavior engine shared by HTTP and in-process use.
 - Deterministic mailbox scenarios for CI.
 - Rich adversarial controls: replay, stale cursors, transient failures, auth failures, throttling, and data drift.
-- Clean enough boundaries that a product like `microtms-next` can later consume the harness without carrying over app-local concepts such as `branch_id`, `sync_revision`, or UTMS orchestration.
 
 ## Architecture
 
