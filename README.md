@@ -25,13 +25,6 @@ It is designed to serve two equally important use cases from one canonical behav
 - `src`
   - the combined convenience package that installs both providers for the zero-config path
 
-## Project Contract
-
-- App-specific policy does not belong in this repository.
-- Provider identity and mailbox-state evolution do belong in this repository.
-- HTTP and SDK surfaces must stay behaviorally equivalent.
-- New fidelity should land in the canonical engine first, then get exercised through both SDK and HTTP tests.
-
 ## Package Shapes
 
 You can consume `email-connect` in the simplest shape that matches your product:
