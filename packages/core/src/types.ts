@@ -62,14 +62,26 @@ export type GraphBackendConfig = BackendFaultConfig & {
  * process-global OAuth service.
  */
 export type ConnectBackendConfig = {
+  // Override the provider/browser consent resolution for this mailbox.
   consentMode?: ConnectConsentMode;
+  // Simulate one OAuth token-endpoint failure family for this mailbox.
   tokenFailureMode?: ConnectTokenFailureMode;
+  // Optionally narrow token failures to operations such as `code.exchange` or
+  // `token.refresh`.
   tokenFailureOperations?: string[];
   tokenFailureHits?: number;
+  // Force refresh-token omission on future grants, either once or always.
   omitRefreshToken?: 'never' | 'once' | 'always';
+  // Remove specific scopes from the final approved grant to model consent or
+  // backend drift.
   dropGrantedScopes?: string[];
+  // Override the provider default for refresh-token rotation during refresh.
   rotateRefreshTokenOnRefresh?: boolean;
+  // Control whether an old refresh token is invalidated immediately after
+  // rotation.
   revokePriorRefreshTokenOnRotation?: boolean;
+  // TTL knobs let tests push code and token expiry without sleeping for an
+  // hour-long real-world default.
   authCodeTtlSec?: number;
   accessTokenTtlSec?: number;
   refreshTokenTtlSec?: number;
@@ -91,7 +103,10 @@ export type MailboxBackendConfig = GmailBackendConfig &
  */
 export type MailboxAuthSeed = {
   clientId?: string | null;
+  // When omitted, provider defaults for the selected capability mode are used.
   scopes?: string[];
+  // Capability mode is the product intent the mailbox was granted for, not
+  // necessarily an exhaustive description of every individual scope.
   capabilityMode?: ConnectCapabilityMode | null;
   accessToken?: string;
   accessTokenExpiresAt?: string | Date | null;
@@ -136,16 +151,23 @@ export type EmbeddedMessageSeed = {
  * inputs often start life as strings, buffers, or decoded blobs.
  */
 export type AttachmentSeed = {
+  // Optional provider-visible id. When omitted, the engine generates a stable
+  // synthetic id for the mailbox instance.
   providerAttachmentId?: string;
   filename: string;
   mimeType: string;
+  // Accept loose binary-ish inputs so fixtures can stay ergonomic.
   contentBytes: Uint8Array | ArrayBuffer | Buffer | string;
   sizeBytes?: number | null;
+  // Graph distinguishes file/item/reference attachments; Gmail mainly treats
+  // these as metadata differences.
   attachmentType?: MailAttachmentType;
   isInline?: boolean;
   contentId?: string | null;
   contentLocation?: string | null;
   sourceUrl?: string | null;
+  // Item attachments can expose a lightweight embedded message without forcing
+  // core to model recursive mailboxes.
   embeddedMessage?: EmbeddedMessageSeed | null;
 };
 
@@ -155,17 +177,24 @@ export type AttachmentSeed = {
  */
 export type MessageSeed = {
   providerMessageId?: string;
+  // Thread ids can be supplied to model existing conversations; otherwise the
+  // engine creates one.
   providerThreadId?: string | null;
   subject?: string | null;
   from?: string | null;
   to?: MessageAddressLike;
+  // Internet Message-ID and reply-chain headers are explicit because sync and
+  // compose code often asserts against them.
   messageId?: string | null;
   inReplyTo?: string | null;
   references?: string | null;
   snippet?: string | null;
   bodyText?: string | null;
   bodyHtml?: string | null;
+  // Provider services decide how to expose raw headers, but the canonical state
+  // preserves them first.
   rawHeaders?: HeaderMap | null;
+  // Defaults to `['INBOX']` when omitted.
   labels?: string[];
   receivedAt?: string | Date | null;
   attachments?: AttachmentSeed[];
@@ -176,6 +205,8 @@ export type MessageSeed = {
  * reuse the same attachment and body modeling as imported or received mail.
  */
 export type DraftSeed = {
+  // Provider-facing ids remain overridable so tests can seed specific compose
+  // resources when needed.
   providerDraftId?: string;
   providerDraftMessageId?: string | null;
   providerThreadId?: string | null;
@@ -286,13 +317,19 @@ export type OutboxMessage = {
  */
 export type CreateMailboxInput = {
   id?: string;
+  // Aliases make tests and control-plane URLs more readable than synthetic ids.
   alias?: string;
   provider: ProviderKind;
   primaryEmail: string;
   providerUserId?: string;
   displayName?: string | null;
+  // A direct bearer token can be preloaded for lightweight HTTP tests, though
+  // most callers should prefer the richer `auth` seed below.
   accessToken?: string;
+  // Backend config controls latency, auth faults, history/delta quirks, and
+  // connect-plane overrides at mailbox scope.
   backend?: Partial<MailboxBackendConfig>;
+  // Preseed the mailbox into a specific OAuth lifecycle state.
   auth?: MailboxAuthSeed;
   messages?: MessageSeed[];
   drafts?: DraftSeed[];
@@ -308,7 +345,10 @@ export type OAuthClientInput = {
   clientSecret?: string | null;
   name?: string | null;
   redirectUris: string[];
+  // Determines whether consent is auto-approved, auto-denied, or rendered
+  // interactively by default.
   defaultConsentMode?: ConnectConsentMode;
+  // Public clients can disable PKCE only when a test explicitly wants that.
   allowPkce?: boolean;
 };
 
@@ -335,14 +375,22 @@ export type AuthorizationRequestInput = {
   clientId: string;
   redirectUri: string;
   state?: string | null;
+  // Empty arrays are allowed; providers will then fill in their default scopes
+  // for the chosen capability mode.
   requestedScopes: string[];
+  // Gmail can union previously granted scopes into the next request.
   includeGrantedScopes?: boolean;
   capabilityMode?: ConnectCapabilityMode | null;
+  // Explicit access type is optional because providers infer it differently.
   accessType?: 'online' | 'offline';
+  // `prompt` and `loginHint` intentionally stay provider-native because app
+  // code often forwards them directly.
   prompt?: string | null;
   loginHint?: string | null;
   codeChallenge?: string | null;
   codeChallengeMethod?: 'plain' | 'S256' | null;
+  // Pre-resolve consent to a mailbox when the caller already knows which
+  // account the authorization should target.
   mailboxId?: string | null;
 };
 
@@ -413,7 +461,11 @@ export type OAuthTokenGrant = {
   accessToken: string;
   tokenType: 'Bearer';
   expiresIn: number;
+  // The normalized grant scopes are returned even when the provider wire
+  // format would normally encode them as one space-delimited string.
   grantedScopes: string[];
+  // Capability mode is carried through so downstream tests can assert whether a
+  // mailbox currently has read-only or send-capable consent.
   capabilityMode: ConnectCapabilityMode | null;
   refreshToken?: string;
   refreshTokenExpiresAt?: string | null;
@@ -425,6 +477,8 @@ export type OAuthTokenGrant = {
 export type ProviderEndpointUrls = {
   authorizeUrl: string;
   tokenUrl: string;
+  // Providers may or may not expose revoke and profile endpoints in the public
+  // convenience surface.
   revokeUrl?: string;
   userInfoUrl?: string;
   graphMeUrl?: string;
@@ -455,6 +509,7 @@ export type MailboxSnapshot = {
   accessToken: string;
   auth: MailboxAuthSnapshot;
   backend: MailboxBackendConfig;
+  // These arrays are cloned read views, not live handles into engine state.
   messages: MailboxMessage[];
   drafts: MailboxDraft[];
   changes: MailboxChange[];
@@ -475,6 +530,8 @@ export type MailboxRecord = Omit<MailboxSnapshot, 'auth'> & {
 export type CreateMailboxResult = {
   mailboxId: string;
   alias: string | null;
+  // The mailbox's current bearer token is returned immediately so HTTP callers
+  // can start exercising provider routes right after seeding.
   accessToken: string;
   provider: ProviderKind;
   primaryEmail: string;

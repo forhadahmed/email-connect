@@ -104,20 +104,34 @@ type ThreadState = {
 // Email generation plans combine mailbox target, volume, timing, conversation
 // density, participants, and optional attachment generation.
 export type EmailGenerationPlan = {
+  // Target mailbox that will receive the generated traffic.
   mailboxId: string;
+  // Total number of messages to emit into the mailbox.
   count: number;
+  // Timeline bounds; defaults are derived from engine time and message count.
   startAt?: string | Date;
   endAt?: string | Date;
+  // Workload profile shapes the timestamp distribution and default reply or
+  // attachment density.
   profile?: MailboxEmailProfile;
+  // Deterministic seed for reproducible timelines, thread choices, and
+  // attachment insertion.
   seed?: number;
+  // Source of subject/body/attachment content for each generated message.
   templateSource: MessageTemplateSource;
+  // Optional sender and recipient pools used when templates omit those fields.
   participants?: {
     senders?: string[];
     recipients?: string[];
   };
+  // Probability that the next generated message continues an existing thread.
   replyChance?: number;
+  // Prevent runaway reply chains when generating busy or bursty inboxes.
   maxThreadDepth?: number;
+  // Probability of injecting one synthetic attachment when the template did not
+  // already supply attachments.
   attachmentChance?: number;
+  // Override the default lightweight text attachment factory.
   syntheticAttachmentFactory?: (context: TemplateRequestContext) => AttachmentSeed | null;
 };
 

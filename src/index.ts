@@ -5,6 +5,14 @@ import {
 import { gmailProvider } from '@email-connect/gmail';
 import { graphProvider } from '@email-connect/graph';
 
+/**
+ * The root `email-connect` package is the shortest-path install for developers
+ * who want both providers without explicit composition.
+ *
+ * It re-exports the high-value combined surface from `@email-connect/core`,
+ * `@email-connect/gmail`, and `@email-connect/graph`, then installs both
+ * providers by default in the root engine below.
+ */
 export {
   loadScenario,
   createArrayTemplateSource,

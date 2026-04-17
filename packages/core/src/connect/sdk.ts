@@ -50,6 +50,10 @@ function buildAuthorizationUrl(params: {
 /**
  * These wrappers intentionally stay thin. The canonical behavior lives in the
  * connect plane; the SDK simply gives tests ergonomic, typed entry points.
+ *
+ * Reach for these helpers when you want to test an OAuth flow in-process
+ * without spinning up the HTTP mock server. The state transitions and token
+ * semantics still go through the same underlying connect plane.
  */
 export function registerOAuthClient(engine: EmailConnectEngine, input: OAuthClientInput) {
   return engine.connect.registerClient(input);
