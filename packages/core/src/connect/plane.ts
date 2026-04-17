@@ -450,6 +450,8 @@ export class EmailConnectConnectPlane {
     const shouldRotateRefreshToken =
       mailbox.backend.connect?.rotateRefreshTokenOnRefresh ??
       Boolean(provider.connect.rotateRefreshTokenOnRefreshByDefault);
+    // Refresh-token rotation keeps the mailbox on one active refresh lineage:
+    // either mint a new token now or keep reusing the current one.
     const nextRefreshToken = shouldRotateRefreshToken
       ? this.engine.generateId(`${mailbox.provider}-refresh-token`)
       : priorRefreshToken;
@@ -464,6 +466,8 @@ export class EmailConnectConnectPlane {
       refreshTokenExpiresAt: mailbox.auth.refreshTokenExpiresAt,
     };
     this.engine.replaceMailboxAccessToken(mailbox, accessToken);
+    // Some scenarios intentionally keep the old token valid during rotation; by
+    // default we remove it immediately to match the common provider behavior.
     if (shouldRotateRefreshToken && priorRefreshToken && mailbox.backend.connect?.revokePriorRefreshTokenOnRotation !== false) {
       this.refreshTokenToMailboxId.delete(priorRefreshToken);
     }
@@ -592,6 +596,8 @@ export class EmailConnectConnectPlane {
     const configured = mailbox.backend.connect?.omitRefreshToken || 'never';
     if (configured === 'always') return false;
     if (configured === 'once') {
+      // Consume the one-shot toggle immediately so only the next approval
+      // suppresses `refresh_token`; later grants revert to normal logic.
       mailbox.backend = {
         ...mailbox.backend,
         connect: {
@@ -705,6 +711,8 @@ export class EmailConnectConnectPlane {
     }
     if (request.loginHint) {
       const hint = request.loginHint.toLowerCase();
+      // `login_hint` is only treated as decisive when it resolves to exactly
+      // one mailbox; otherwise we keep looking instead of guessing.
       const matches = this.engine
         .listMailboxes()
         .filter((mailbox) => mailbox.provider === request.provider)
@@ -727,6 +735,8 @@ export class EmailConnectConnectPlane {
     if (!providerMailboxes.length) {
       throw new NotFoundError(`No ${request.provider} mailbox is available for authorization`);
     }
+    // More than one mailbox is still in play here, so the caller has to choose
+    // one explicitly via `mailboxId` or a unique `login_hint`.
     throw new ConflictError(
       `Authorization request requires mailbox selection for ${request.provider}; supply login_hint or mailboxId`,
     );

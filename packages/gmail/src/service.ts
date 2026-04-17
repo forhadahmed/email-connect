@@ -9,6 +9,13 @@ import {
 } from '@email-connect/core';
 import type { MailboxChange, MailboxMessage, MailboxRecord } from '@email-connect/core';
 
+/**
+ * Public Gmail resource types below are intentionally close to the shapes most
+ * developers already know from Google's client libraries.
+ *
+ * They are not exhaustive copies of the full Gmail API surface; they describe
+ * the subset this harness treats as first-class product behavior.
+ */
 // Gmail client libraries wrap resources under a `data` property; preserving
 // that shape keeps white-box tests close to real Google client code.
 export type GmailApiResponse<T> = { data: T };
@@ -732,6 +739,8 @@ export class GmailService {
     if (!Number.isFinite(startHistoryId) || startHistoryId < 0) {
       throw new Error('Invalid startHistoryId');
     }
+    // Once the caller falls behind this configured row id, the mock behaves
+    // like Gmail history invalidation and forces a full resync.
     if (mailbox.backend.historyResetBeforeRowId && startHistoryId < mailbox.backend.historyResetBeforeRowId) {
       throw new Error('Requested entity was not found: startHistoryId expired');
     }
@@ -748,6 +757,8 @@ export class GmailService {
           .map((record) => filterHistoryRecordByTypes(record, params.historyTypes))
           .filter((record): record is GmailHistoryRecord => record != null);
       }
+      // Replay deliberately emits an extra added-looking shape so consumers can
+      // test idempotence instead of assuming each message appears only once.
       return [...records, { messages: [{ id: change.providerMessageId }] }, { messagesAdded: [] }]
         .map((record) => filterHistoryRecordByTypes(record, params.historyTypes))
         .filter((record): record is GmailHistoryRecord => record != null);
@@ -865,6 +876,8 @@ export class GmailService {
     const raw = String(requestBody.raw || '');
     const parsed = parseRawEmailBase64Url(raw);
     const internalDateSource = String(requestBody.internalDateSource || '').trim().toLowerCase();
+    // Gmail only trusts the message Date header when the caller opts into that
+    // behavior explicitly; otherwise imported mail lands at mock "now".
     const dateFromHeader =
       internalDateSource === 'dateheader' && parsed.date ? new Date(parsed.date) : null;
     const receivedAt =
@@ -896,6 +909,8 @@ export class GmailService {
               .map((labelId) => String(labelId || '').trim())
               .filter(Boolean)
               .map((labelId) => {
+                // Control-plane callers may seed provider-visible Gmail label
+                // ids, but canonical storage keeps the underlying label names.
                 const match = labelId.match(MOCK_GMAIL_LABEL_ID_PATTERN);
                 return match?.[1] ? Buffer.from(match[1], 'base64url').toString('utf8') : labelId;
               }),
@@ -904,6 +919,8 @@ export class GmailService {
       receivedAt,
     });
     if (requestBody.deleted === true) {
+      // This lets tests start from an already-deleted imported message without
+      // first replaying a separate add-then-delete sequence.
       this.engine.deleteMessage(mailboxId, inserted.providerMessageId);
     }
     return {

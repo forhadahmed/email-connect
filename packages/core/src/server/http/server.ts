@@ -614,6 +614,8 @@ export class EmailConnectHttpServer {
         res.end();
         return;
       } catch (error) {
+        // Auto-approve still needs an unambiguous mailbox choice. If resolution
+        // fails, we fall through and render the interactive picker instead.
         if (!(error instanceof EmailConnectError)) throw error;
       }
     }

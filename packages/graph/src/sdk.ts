@@ -235,6 +235,8 @@ export function getOutlookGraphClientForMailbox(engine: EmailConnectEngine, mail
  * downstream systems tend to repeat: attachment download, reply drafting, and
  * direct draft creation.
  */
+// Download one Outlook attachment, preferring inline `contentBytes` but falling
+// back to Graph's `$value` download path when the metadata payload omits bytes.
 export async function downloadOutlookAttachment(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -253,6 +255,8 @@ export async function downloadOutlookAttachment(params: {
   throw new Error('Outlook attachment response missing inline and $value bytes');
 }
 
+// Create a reply draft through Graph's `createReply` flow, then patch the body
+// so downstream systems can treat it like a normal editable draft.
 export async function createOutlookReplyDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -274,6 +278,8 @@ export async function createOutlookReplyDraft(params: {
   };
 }
 
+// Send an existing Graph draft and return the resource ids a caller would most
+// likely keep for later assertions.
 export async function sendOutlookReplyDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -288,6 +294,7 @@ export async function sendOutlookReplyDraft(params: {
   };
 }
 
+// Create a plain-text Outlook draft through the Graph-shaped client facade.
 export async function createOutlookDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;

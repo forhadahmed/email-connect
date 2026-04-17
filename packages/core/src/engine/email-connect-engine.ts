@@ -219,7 +219,11 @@ function initialMailboxAuth(input: CreateMailboxInput, accessToken: string): Mai
 // Engine options define the initial deterministic clock and installed provider
 // packages for a test harness instance.
 export type EmailConnectEngineOptions = {
+  // Starting clock value for generated mail, token expiry, and other
+  // time-dependent behavior.
   baseTime?: string | Date;
+  // Installed provider packages. The root convenience package preinstalls both
+  // Gmail and Graph, while narrower packages pass only their own provider.
   providers?: EmailConnectProvider[];
 };
 

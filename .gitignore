@@ -13,6 +13,8 @@ coverage/
 *.log
 TODO.md
 .todo/
+gmail.md
+graph.md
 
 # Common local editor and OS noise.
 .DS_Store

@@ -166,6 +166,8 @@ export function getGmailClientForMailbox(engine: EmailConnectEngine, mailboxId: 
  * Helpers below are opinionated convenience flows on top of the client-shaped
  * API. They model the common Gmail testing tasks consumers keep repeating.
  */
+// Download one Gmail attachment and decode Gmail's base64url wrapper back into
+// raw bytes for fixture assertions or downstream parsing.
 export async function downloadGmailAttachment(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -184,6 +186,8 @@ export async function downloadGmailAttachment(params: {
   return decodeBase64UrlToBytes(res.data.data);
 }
 
+// Create a plain-text Gmail draft through the same canonical draft pipeline the
+// provider HTTP facade uses.
 export async function createGmailDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -202,6 +206,8 @@ export async function createGmailDraft(params: {
   };
 }
 
+// Create a reply-oriented Gmail draft that preserves thread headers and
+// normalizes the subject into Gmail-style reply form.
 export async function createGmailReplyDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;
@@ -220,6 +226,8 @@ export async function createGmailReplyDraft(params: {
   };
 }
 
+// Send an existing Gmail draft and return the provider-visible message and
+// thread identifiers recorded by the mock.
 export async function sendGmailReplyDraft(params: {
   engine: EmailConnectEngine;
   mailboxId: string;

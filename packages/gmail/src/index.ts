@@ -1,6 +1,15 @@
 import { EmailConnectEngine, EmailConnectHttpServer, type EmailConnectEngineOptions } from '@email-connect/core';
 import { gmailProvider } from './provider.js';
 
+/**
+ * `@email-connect/gmail` is the Gmail-only install shape.
+ *
+ * It exports three layers:
+ * - `gmailProvider` for explicit composition with `@email-connect/core`
+ * - white-box SDK helpers that feel close to Google client usage
+ * - Gmail-only convenience constructors for the common "just give me Gmail"
+ *   path
+ */
 export { gmailProvider } from './provider.js';
 export { getGmailClientForMailbox, downloadGmailAttachment, createGmailDraft, createGmailReplyDraft, sendGmailReplyDraft } from './sdk.js';
 export {

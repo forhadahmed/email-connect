@@ -8,6 +8,14 @@ import {
 } from '@email-connect/core';
 import type { AttachmentSeed, MailboxAttachment, MailboxChange, MailboxDraft, MailboxMessage, MailboxRecord } from '@email-connect/core';
 
+/**
+ * This file deliberately builds Graph resources as plain objects rather than a
+ * large exported type hierarchy.
+ *
+ * The goal here is pragmatic fidelity: preserve the Graph response shapes that
+ * downstream mailbox-sync and compose code actually consumes, without forcing
+ * the package surface to mirror every official SDK type.
+ */
 // Graph parser regexes are intentionally named because they encode supported
 // mock-provider contract, not just implementation detail.
 const GRAPH_RECEIVED_AFTER_FILTER_PATTERN = /receivedDateTime ge ([^ )]+)/;
@@ -778,6 +786,8 @@ export class GraphService {
       url.searchParams.get('$skiptoken'),
     );
     const deltaToken = decodeOpaqueToken<{ cursor: number; top: number }>(url.searchParams.get('$deltatoken'));
+    // Continuation links take precedence over a fresh caller-supplied cursor
+    // because they carry the exact page state from the previous response.
     const cursor =
       skipToken?.cursor ??
       deltaToken?.cursor ??
@@ -805,6 +815,9 @@ export class GraphService {
       cursor: change.rowId,
       item: this.deltaItemForChange(mailbox, change, messagesById.get(change.providerMessageId), options?.bodyContentType),
     }));
+    // Folder transitions are tracked separately from canonical message changes
+    // because inbox delta has to express "left inbox" without deleting the
+    // underlying message from the mailbox model.
     const folderEvents = runtime.folderEvents
       .filter((event) => event.folderId === 'inbox')
       .map((event) => ({
@@ -812,6 +825,8 @@ export class GraphService {
         item:
           event.kind === 'removed_from_folder'
             ? {
+                // `@removed: changed` tells Graph delta consumers to drop the
+                // item from this folder view while keeping the message alive.
                 id: event.providerMessageId,
                 '@removed': {
                   reason: 'changed',
@@ -839,6 +854,8 @@ export class GraphService {
     return {
       value: page.map((event) => event.item),
       '@odata.nextLink':
+        // Keep paging until this filtered event stream is exhausted; only then
+        // hand back a stable deltaLink anchored at the latest cursor.
         events.length > offset + page.length
           ? encodeQueryUrl(baseUrl, '/graph/v1.0/me/mailFolders/inbox/messages/delta', {
               '$skiptoken': encodeOpaqueToken({
@@ -1083,6 +1100,8 @@ export class GraphService {
         ? this.parseMimeSendBody(body)
         : parseSendMailRequest(body);
 
+    // `saveToSentItems=false` skips mailbox materialization, but we still route
+    // the send through a transient draft so outbox observation stays uniform.
     const sentMessage = parsed.saveToSentItems
       ? this.engine.appendMessage(mailboxId, {
           providerMessageId: this.engine.generateId('graph-sent'),
@@ -1099,6 +1118,8 @@ export class GraphService {
       setFolder(this.engine, mailbox, sentMessage.providerMessageId, 'sentitems');
     }
 
+    // Even direct sendMail reuses the draft-send substrate so sendMail and
+    // draft-send flows produce the same canonical outbound side effect.
     const draftSeed = {
       providerDraftId: this.engine.generateId('graph-sendmail'),
       providerThreadId: sentMessage?.providerThreadId || this.engine.generateId('graph-thread'),
@@ -1188,6 +1209,8 @@ export class GraphService {
         : body.attachmentItem && typeof body.attachmentItem === 'object'
           ? (body.attachmentItem as Record<string, unknown>)
           : null;
+    // Accept both `AttachmentItem` and `attachmentItem` because client wrappers
+    // in the wild are inconsistent about the casing here.
     if (!item) {
       throw new ConflictError('AttachmentItem is required to create a Graph upload session');
     }
@@ -1258,6 +1281,8 @@ export class GraphService {
     const start = Number(match[1]);
     const end = Number(match[2]);
     const total = Number(match[3]);
+    // This mock keeps upload sessions strictly sequential: each chunk must
+    // match the next range the session previously advertised.
     if (total !== session.size || start !== session.nextExpectedStart || end < start || end + 1 - start !== bytes.byteLength) {
       throw new ConflictError('Graph upload chunk did not match next expected range');
     }
@@ -1266,6 +1291,7 @@ export class GraphService {
     session.nextExpectedStart = end + 1;
 
     if (session.nextExpectedStart < session.size) {
+      // Mirror Graph's intermediate 202 response until the final byte lands.
       return {
         statusCode: 202,
         body: {
