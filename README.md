@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/forhadahmed/email-connect/releases/download/0.1/hero.svg" alt="email-connect — Deterministic test engine for Gmail and Microsoft Graph" width="960">
+  <img src="https://raw.githubusercontent.com/forhadahmed/email-connect/0.1/.github/hero.svg" alt="email-connect — Deterministic test engine for Gmail and Microsoft Graph" width="960">
 </p>
 
 # email-connect

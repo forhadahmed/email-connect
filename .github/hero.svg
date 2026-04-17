@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 220" role="img" aria-label="email-connect — Deterministic test engine for Gmail and Microsoft Graph">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e2e8f0"/><stop offset="50%" stop-color="#94a3b8"/><stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#cbd5e1"/><stop offset="50%" stop-color="#64748b"/><stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <mask id="mA" maskUnits="userSpaceOnUse"><rect x="10" y="30" width="70" height="40" rx="20" fill="white"/><rect x="18" y="38" width="54" height="24" rx="12" fill="black"/></mask>
+    <mask id="mB" maskUnits="userSpaceOnUse"><rect x="60" y="30" width="70" height="40" rx="20" fill="white"/><rect x="68" y="38" width="54" height="24" rx="12" fill="black"/></mask>
+    <clipPath id="o" clipPathUnits="userSpaceOnUse"><rect x="58" y="28" width="24" height="22"/></clipPath>
+  </defs>
+  <rect width="1120" height="220" fill="#0b1020"/>
+  <svg x="48" y="50" width="300" height="120" viewBox="0 0 150 60" preserveAspectRatio="xMidYMid meet">
+    <g transform="translate(0 -20)">
+      <rect x="10" y="30" width="70" height="40" rx="20" fill="url(#a)" mask="url(#mA)"/>
+      <rect x="60" y="30" width="70" height="40" rx="20" fill="url(#b)" mask="url(#mB)"/>
+      <g clip-path="url(#o)"><rect x="10" y="30" width="70" height="40" rx="20" fill="url(#a)" mask="url(#mA)"/></g>
+    </g>
+  </svg>
+  <text x="380" y="110" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif" font-size="52" font-weight="700"
+        fill="#f8fafc" letter-spacing="-1.5">email<tspan fill="#94a3b8">·</tspan>connect</text>
+  <text x="382" y="148" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif" font-size="18" font-weight="400"
+        fill="#94a3b8" letter-spacing="0.4">Deterministic test engine for Gmail &amp; Microsoft Graph</text>
+</svg>
