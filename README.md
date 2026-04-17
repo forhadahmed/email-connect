@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/forhadahmed/email-connect/releases/download/0.1/hero.svg" alt="email-connect — Deterministic test engine for Gmail and Microsoft Graph" width="960">
+</p>
+
 # email-connect
 
 `email-connect` is a standalone provider simulation harness for Gmail and Microsoft Graph mailbox flows and mailbox-connect OAuth flows.
